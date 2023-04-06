@@ -18,7 +18,7 @@
 #define BULLET_HEIGHT (BULLET_WIDTH * 3.3)
 #define MAX_BULLETS_NUM 50
 #define RELOAD_TIME 20
-#define PLAYER_HEALTH 1000
+#define PLAYER_HEALTH 100
 
 #define SPAWN_DELAY 30
 #define MAX_SPAWN 1
@@ -477,7 +477,7 @@ void cap_fps(Uint32 max_fps) {
     static Uint32 ticks = 0;
     if (ticks == 0) { ticks = SDL_GetTicks(); }
     Uint32 new_ticks = SDL_GetTicks();
-    Uint32 default_ = 1000 / max_fps;  // delay between frames assuming 0ms to calculate each frame
+    Uint32 default_ = 1000. / max_fps;  // delay between frames assuming 0ms to calculate each frame
     Uint32 diff = new_ticks - ticks;  // time to calculate last frame
     if (default_ > diff) {
         // only wait when the wait time is > 0
@@ -485,6 +485,163 @@ void cap_fps(Uint32 max_fps) {
     }
     ticks = new_ticks;
 }
+
+typedef struct {
+    char c;
+    SDL_Rect rect; // rectangle on a texture with the character `c`
+} FontChar;
+
+typedef struct {
+    FontChar *font_chars;
+    char first_char;
+    char last_char;
+    char *texture_file_name;
+} Font;
+
+FontChar ken_pixel_font_chars[] = {
+        {' ', {0, 0, 11, 54}},
+        {'!', {11, 0, 20, 54}},
+        {'"', {31, 0, 28, 54}},
+        {'#', {59, 0, 37, 54}},
+        {'$', {96, 0, 37, 54}},
+        {'%', {133, 0, 37, 54}},
+        {'&', {170, 0, 41, 54}},
+        {'\'', {211, 0, 20, 54}},
+        {'(', {231, 0, 24, 54}},
+        {')', {255, 0, 24, 54}},
+        {'*', {279, 0, 33, 54}},
+        {'+', {311, 0, 37, 54}},
+        {',', {348, 0, 20, 54}},
+        {'-', {368, 0, 37, 54}},
+        {'.', {405, 0, 20, 54}},
+        {'/', {424, 0, 37, 54}},
+        {'0', {461, 0, 37, 54}},
+        {'1', {0, 54, 28, 54}},
+        {'2', {28, 54, 37, 54}},
+        {'3', {65, 54, 37, 54}},
+        {'4', {102, 54, 37, 54}},
+        {'5', {139, 54, 37, 54}},
+        {'6', {176, 54, 37, 54}},
+        {'7', {213, 54, 37, 54}},
+        {'8', {249, 54, 37, 54}},
+        {'9', {286, 54, 37, 54}},
+        {':', {323, 54, 20, 54}},
+        {';', {343, 54, 20, 54}},
+        {'<', {363, 54, 33, 54}},
+        {'=', {395, 54, 37, 54}},
+        {'>', {432, 54, 33, 54}},
+        {'?', {465, 54, 37, 54}},
+        {'@', {0, 108, 37, 54}},
+        {'A', {37, 108, 37, 54}},
+        {'B', {74, 108, 37, 54}},
+        {'C', {111, 108, 37, 54}},
+        {'D', {147, 108, 37, 54}},
+        {'E', {184, 108, 37, 54}},
+        {'F', {221, 108, 37, 54}},
+        {'G', {258, 108, 37, 54}},
+        {'H', {295, 108, 37, 54}},
+        {'I', {332, 108, 28, 54}},
+        {'J', {360, 108, 28, 54}},
+        {'K', {388, 108, 37, 54}},
+        {'L', {425, 108, 33, 54}},
+        {'M', {458, 108, 45, 54}},
+        {'N', {0, 162, 37, 54}},
+        {'O', {37, 162, 37, 54}},
+        {'P', {74, 162, 37, 54}},
+        {'Q', {111, 162, 37, 54}},
+        {'R', {147, 162, 37, 54}},
+        {'S', {184, 162, 37, 54}},
+        {'T', {221, 162, 37, 54}},
+        {'U', {258, 162, 37, 54}},
+        {'V', {295, 162, 37, 54}},
+        {'W', {332, 162, 45, 54}},
+        {'X', {377, 162, 37, 54}},
+        {'Y', {414, 162, 37, 54}},
+        {'Z', {451, 162, 37, 54}},
+        {'[', {488, 162, 24, 54}},
+        {'\\', {0, 217, 37, 54}},
+        {']', {37, 217, 24, 54}},
+        {'^', {61, 217, 37, 54}},
+        {'_', {98, 217, 37, 54}},
+        {'`', {135, 217, 37, 54}},
+        {'a', {171, 217, 37, 54}},
+        {'b', {208, 217, 37, 54}},
+        {'c', {245, 217, 37, 54}},
+        {'d', {282, 217, 37, 54}},
+        {'e', {319, 217, 37, 54}},
+        {'f', {356, 217, 37, 54}},
+        {'g', {393, 217, 37, 54}},
+        {'h', {429, 217, 37, 54}},
+        {'i', {466, 217, 28, 54}},
+        {'j', {0, 271, 28, 54}},
+        {'k', {28, 271, 37, 54}},
+        {'l', {65, 271, 33, 54}},
+        {'m', {98, 271, 45, 54}},
+        {'n', {143, 271, 37, 54}},
+        {'o', {180, 271, 37, 54}},
+        {'p', {217, 271, 37, 54}},
+        {'q', {254, 271, 37, 54}},
+        {'r', {291, 271, 37, 54}},
+        {'s', {327, 271, 37, 54}},
+        {'t', {364, 271, 37, 54}},
+        {'u', {401, 271, 37, 54}},
+        {'v', {438, 271, 37, 54}},
+        {'w', {0, 325, 45, 54}},
+        {'x', {45, 325, 37, 54}},
+        {'y', {82, 325, 37, 54}},
+        {'z', {119, 325, 37, 54}},
+        {'{', {156, 325, 28, 54}},
+        {'|', {184, 325, 20, 54}},
+        {'}', {204, 325, 28, 54}}
+    };
+
+Font ken_pixel_font = {ken_pixel_font_chars, ' ', '}', "assets/KenPixel.png" };
+
+typedef struct {
+    char *text;
+    int x, y;
+    float scale;
+    Font *font;
+} Text;
+
+Uint32 calculate_width(Text *text) {
+    Uint32 width = 0, i = 0;
+    char c;
+    while((c = text->text[i++]) != '\0') {
+        width += text->scale * text->font->font_chars[c - text->font->first_char].rect.w;
+    }
+    return width;
+}
+
+void write_to_screen(SDL_Renderer *renderer, Text *text) {
+    Font *font = text->font;
+    SDL_Texture *texture = sdl_load_texture(renderer, font->texture_file_name);
+    char c;
+    int i = 0, w = text->x;
+    while ((c = text->text[i++]) != '\0') {
+        if (c < font->first_char || c > font->last_char) {
+            printf("Warning: can't print char: %c (%d)\n", c, c);
+        }
+        SDL_Rect *src_rect = &font->font_chars[c - font->first_char].rect;
+        SDL_Rect dst_rect;
+        dst_rect.x = w;
+        dst_rect.y = text->y;
+        dst_rect.w = src_rect->w * text->scale;
+        dst_rect.h = src_rect->h * text->scale;
+        SDL_RenderCopy(renderer, texture, src_rect, &dst_rect);
+        w += dst_rect.w;
+    }
+}
+
+void show_fps(SDL_Renderer *renderer, SDL_Texture *font_texture, Uint32 fps) {
+    char fps_str[20]; sprintf(fps_str, "fps: %d", fps);
+    /* printf("%s\n", fps_str); */
+    Text text = {fps_str, 0, 10, 1./2, &ken_pixel_font};
+    Uint32 width = calculate_width(&text);
+    text.x = SCREEN_WIDTH - width - 10;
+    write_to_screen(renderer, &text);
+}
+
 
 int main(int argc, char *argv[]) {
     srand(12);
@@ -501,11 +658,15 @@ int main(int argc, char *argv[]) {
     SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     if (!renderer) { sdl_fail(); }
 
+    SDL_Texture *font_texture = sdl_load_texture(renderer, "assets/KenPixel.png");
+
     Spaceship *player = Spaceship_new_player_spaceship(renderer);
     BulletsManager *bullets_manager = BulletsManager_new();
 
     Spaceship *curr = player;
     Uint32 spawn_delay = SPAWN_DELAY;
+    Uint32 ticks = SDL_GetTicks();
+    Uint32 fps = MAX_FPS;
 
     while(1) {
         if (player->health == 0) {
@@ -513,10 +674,12 @@ int main(int argc, char *argv[]) {
             break;
         }
 
+
         if (!handle_input(player)) { break; }
 
         SDL_SetRenderDrawColor(renderer, 64, 64, 64, 255);
         SDL_RenderClear(renderer);
+
 
         move_spaceships(player);
         BulletsManager_move_bullets(bullets_manager);
@@ -536,8 +699,16 @@ int main(int argc, char *argv[]) {
             curr = curr->next;
         }
         BulletsManager_render_bullets(bullets_manager, renderer);
+        Uint32 diff = SDL_GetTicks() - ticks;
+        if (diff != 0) {
+            fps = 1000. / diff;
+            if (fps > MAX_FPS) {
+                fps = MAX_FPS;
+            }
+        }
+        show_fps(renderer, font_texture, fps);
+        ticks = SDL_GetTicks();
         SDL_RenderPresent(renderer);
-
         cap_fps(MAX_FPS);
     }
 
