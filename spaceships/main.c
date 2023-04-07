@@ -25,9 +25,14 @@
 #define ENEMIES_COUNT 8
 #define ENEMY_HEALTH 100
 
+#define STARS_MAX_SPEED 3
+#define STARS_COUNT 50
+#define STARS_SPEED_FACTOR 0
+
 #define MAX_FPS 60
 
 #define MIN(X,Y) ((X) < (Y) ? (X) : (Y))
+#define MAX(X,Y) ((X) > (Y) ? (X) : (Y))
 
 void sdl_fail() {
     printf("SDL ERROR: %s\n", SDL_GetError());
@@ -38,10 +43,6 @@ SDL_Texture *sdl_load_texture(SDL_Renderer *renderer, char *file_name) {
     SDL_Texture *texture = IMG_LoadTexture(renderer, file_name);
     if (texture == NULL) { sdl_fail(); }
     return texture;
-}
-
-void sdl_render_copy(SDL_Renderer *renderer, SDL_Texture *texture, const SDL_Rect *srcrect, const SDL_Rect *dstrect) {
-    SDL_RenderCopy(renderer, texture, srcrect, dstrect);
 }
 
 typedef struct {
@@ -142,23 +143,13 @@ void BulletsManager_destroy(BulletsManager *bullets_manager) {
 void BulletsManager_add_bullet(
     BulletsManager *bullets, SDL_Renderer *renderer, SDL_Rect *spaceship_rect, bool reverse
 ) {
-    if (reverse) {
-        Bullet_new_fill_regular_bullet(
-            &bullets->objs[bullets->tail],
-            renderer,
-            spaceship_rect->x + (spaceship_rect->w / 2.) - (BULLET_WIDTH / 2.),
-            spaceship_rect->y + spaceship_rect->h,
-            reverse
-        );
-    } else {
-        Bullet_new_fill_regular_bullet(
-            &bullets->objs[bullets->tail],
-            renderer,
-            spaceship_rect->x + (spaceship_rect->w / 2.) - (BULLET_WIDTH / 2.),
-            spaceship_rect->y - BULLET_HEIGHT,
-            reverse
-        );
-    }
+    Bullet_new_fill_regular_bullet(
+        &bullets->objs[bullets->tail],
+        renderer,
+        spaceship_rect->x + (spaceship_rect->w / 2.) - (BULLET_WIDTH / 2.),
+        reverse ? spaceship_rect->y + spaceship_rect->h : spaceship_rect->y - BULLET_HEIGHT,
+        reverse
+    );
     bullets->used[bullets->tail] = true;
     bullets->tail = (bullets->tail + 1) % MAX_BULLETS_NUM;
     if (bullets->tail == bullets->head) {
@@ -264,10 +255,13 @@ void Spaceship_render_healthbar(Spaceship *spaceship, SDL_Renderer *renderer) {
     SDL_RenderDrawRect(renderer, &healthbar_empty);
 
     if (spaceship->health > 50) {
+        // green healthbar
         SDL_SetRenderDrawColor(renderer, 0, 255, 0, 255);
     } else if (spaceship->health > 30) {
+        // yellow healthbar
         SDL_SetRenderDrawColor(renderer, 255, 255, 0, 255);
     } else {
+        // red healthbar
         SDL_SetRenderDrawColor(renderer, 255, 0, 0, 255);
     }
 
@@ -294,7 +288,8 @@ char *Rect_to_str(SDL_Rect rect) {
     return result;
 }
 
-void apply_bullet_hits(Spaceship *spaceship, BulletsManager *bullets_manager) {
+Uint32 apply_bullet_hits(Spaceship *spaceship, BulletsManager *bullets_manager) {
+    Uint32 killed = 0;
     Spaceship *prev = NULL, *curr = spaceship;
     while (curr != NULL) {
         for (
@@ -321,8 +316,9 @@ void apply_bullet_hits(Spaceship *spaceship, BulletsManager *bullets_manager) {
                 }
                 if (curr->health == 0) {
                     if (prev == NULL) {
-                        return;
+                        return killed;
                     } else {
+                        killed++;
                         prev->next = curr->next;
                         Spaceship_destroy(curr);
                         curr = prev->next;
@@ -339,6 +335,7 @@ void apply_bullet_hits(Spaceship *spaceship, BulletsManager *bullets_manager) {
             curr = curr->next;
         }
     }
+    return killed;
 }
 
 void spawn_enemies(Spaceship *spaceship, SDL_Renderer *renderer) {
@@ -422,18 +419,16 @@ void move_spaceships(Spaceship *spaceship) {
         Entity_move(curr->entity);
         curr = curr->next;
     }
+    // block player from going out of bounds
     SDL_Rect *player_r = &spaceship->entity->rect;
-    if (player_r->x + (player_r->w / 2.) <= 0) {
-        player_r->x = -(player_r->w / 2.);
-    }
-    if (player_r->x + (player_r->w / 2.) >= SCREEN_WIDTH) {
-        player_r->x = SCREEN_WIDTH - (player_r->w / 2.);
-    }
-    /* if (player_r->y < 0) { player_r->y == 0; } */
+    player_r->x = MAX(player_r->x, -(player_r->w / 2.));
+    player_r->x = MIN(player_r->x, SCREEN_WIDTH - (player_r->w / 2.));
+    player_r->y = MAX(player_r->y, -(player_r->h / 2.));
+    player_r->y = MIN(player_r->y, SCREEN_HEIGHT - player_r->h);
 }
 
-/* void initialize_sdl(SDL_Window *window, SDL_Renderer *renderer) { */
-void initialize_sdl() {
+static void initialize_sdl(SDL_Window *window, SDL_Renderer *renderer) {
+/* void initialize_sdl() { */
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         sdl_fail();
     }
@@ -595,7 +590,7 @@ FontChar ken_pixel_font_chars[] = {
         {'}', {204, 325, 28, 54}}
     };
 
-Font ken_pixel_font = {ken_pixel_font_chars, ' ', '}', "assets/KenPixel.png" };
+Font ken_pixel_font = {ken_pixel_font_chars, ' ', '}', "assets/KenPixelWhite.png" };
 
 typedef struct {
     char *text;
@@ -604,7 +599,7 @@ typedef struct {
     Font *font;
 } Text;
 
-Uint32 calculate_width(Text *text) {
+Uint32 Text_calculate_width(Text *text) {
     Uint32 width = 0, i = 0;
     char c;
     while((c = text->text[i++]) != '\0') {
@@ -613,7 +608,16 @@ Uint32 calculate_width(Text *text) {
     return width;
 }
 
-void write_to_screen(SDL_Renderer *renderer, Text *text) {
+Uint32 Text_calculate_height(Text *text) {
+    Uint32 height = 0, i = 0;
+    char c;
+    while((c = text->text[i++]) != '\0') {
+        height = MAX(height, text->scale * text->font->font_chars[c - text->font->first_char].rect.h);
+    }
+    return height;
+}
+
+void Text_write_to_screen(SDL_Renderer *renderer, Text *text) {
     Font *font = text->font;
     SDL_Texture *texture = sdl_load_texture(renderer, font->texture_file_name);
     char c;
@@ -633,35 +637,127 @@ void write_to_screen(SDL_Renderer *renderer, Text *text) {
     }
 }
 
-void show_fps(SDL_Renderer *renderer, SDL_Texture *font_texture, Uint32 fps) {
-    char fps_str[20]; sprintf(fps_str, "fps: %d", fps);
-    /* printf("%s\n", fps_str); */
-    Text text = {fps_str, 0, 10, 1./2, &ken_pixel_font};
-    Uint32 width = calculate_width(&text);
-    text.x = SCREEN_WIDTH - width - 10;
-    write_to_screen(renderer, &text);
+typedef struct {
+    int x, y;
+    int speed;
+} Star;
+
+int rand_star_speed() {
+    /* int speed; */
+    /* while ((speed = 1 + (rand() % (STARS_MAX_SPEED - 1))) == 1); */
+    /* return speed; */
+    return 1 + (rand() % STARS_MAX_SPEED);
 }
 
+void render_stars(SDL_Renderer *renderer) {
+    static Star stars[STARS_COUNT];
+    static bool initialized = false;
+    static int skip = STARS_SPEED_FACTOR;
+    if (!initialized) {
+        for (int i = 0; i < STARS_COUNT; i++) {
+            stars[i].x = rand() % SCREEN_WIDTH;
+            stars[i].y = rand() % SCREEN_HEIGHT;
+            stars[i].speed = rand_star_speed();
+        }
+        initialized = true;
+    }
+    for (int i = 0; i < STARS_COUNT; i++) {
+        if (skip == 0) {
+            stars[i].y += stars[i].speed;
+            if (stars[i].y - stars[i].speed > SCREEN_HEIGHT) {
+                stars[i].y = 0;
+                stars[i].x = rand() % SCREEN_WIDTH;
+                stars[i].speed = rand_star_speed();
+            }
+            skip = STARS_SPEED_FACTOR;
+        } else {
+            skip--;
+        }
+        SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
+        SDL_RenderDrawLine(renderer, stars[i].x, stars[i].y, stars[i].x, stars[i].y - stars[i].speed);
+    }
+}
+
+void render_fps(SDL_Renderer *renderer, Uint32 fps) {
+    char fps_str[20]; sprintf(fps_str, "fps: %d", fps);
+    Text text = {fps_str, 0, 10, 1./2, &ken_pixel_font};
+    Uint32 width = Text_calculate_width(&text);
+    text.x = SCREEN_WIDTH - width - 10;
+    Text_write_to_screen(renderer, &text);
+}
+
+void render_score(SDL_Renderer *renderer, Uint32 score) {
+    char score_str[10]; sprintf(score_str, "%d", score);
+    Text score_text = { score_str, 0, 0, 1.5, &ken_pixel_font };
+    score_text.x = (SCREEN_WIDTH - Text_calculate_width(&score_text)) / 2.;
+    score_text.y = (SCREEN_HEIGHT - Text_calculate_height(&score_text)) / 2.;
+    Text_write_to_screen(renderer, &score_text);
+}
+
+bool show_game_over_screen(SDL_Renderer *renderer, Uint32 score) {
+    while (1) {
+        SDL_Event event;
+        while(SDL_PollEvent(&event)) {
+            switch(event.type) {
+                case SDL_QUIT:
+                    return false;
+                case SDL_KEYDOWN:
+                    if (event.key.repeat != 0) break;
+                    if (event.key.keysym.scancode == SDL_SCANCODE_Q) return false;
+                    if (event.key.keysym.scancode == SDL_SCANCODE_R) return true;
+                    break;
+            }
+        }
+
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+        SDL_RenderClear(renderer);
+
+        Text game_over_text = { "GAME OVER", 0, 0, 1, &ken_pixel_font};
+        Uint32 game_over_text_width = Text_calculate_width(&game_over_text);
+        Uint32 game_over_text_height = Text_calculate_height(&game_over_text);
+        game_over_text.x = (SCREEN_WIDTH - game_over_text_width) / 2.;
+        game_over_text.y = (SCREEN_HEIGHT - game_over_text_height) / 3.;
+        Text_write_to_screen(renderer, &game_over_text);
+
+        Text hint_text = {
+            "(Q)uit or (R)estart",
+            0,
+            game_over_text.y + game_over_text_height + 10,
+            1./3,
+            &ken_pixel_font
+        };
+        hint_text.x = (SCREEN_WIDTH - Text_calculate_width(&hint_text)) / 2.;
+        Text_write_to_screen(renderer, &hint_text);
+
+        render_score(renderer, score);
+
+        SDL_RenderPresent(renderer);
+    }
+}
 
 int main(int argc, char *argv[]) {
     srand(12);
-    initialize_sdl();
 
-    // TODO: move window and renderer initialization to `initialize_sdl`
-    // (for some reason it doesn't work properly when I move it...)
-    SDL_Window *window = SDL_CreateWindow(
+    SDL_Window *window;
+    SDL_Renderer *renderer;
+
+    initialize_sdl(window, renderer);
+
+    window = SDL_CreateWindow(
         "Spaceship",
         SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
         SCREEN_WIDTH, SCREEN_HEIGHT, 0
     );
     if (!window) { sdl_fail(); }
-    SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+    // TODO: move window and renderer initialization to `initialize_sdl`
+    // (for some reason it doesn't work properly when I move it...)
+    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     if (!renderer) { sdl_fail(); }
 
-    SDL_Texture *font_texture = sdl_load_texture(renderer, "assets/KenPixel.png");
-
+    // initialize game
     Spaceship *player = Spaceship_new_player_spaceship(renderer);
     BulletsManager *bullets_manager = BulletsManager_new();
+    Uint32 score = 0;
 
     Spaceship *curr = player;
     Uint32 spawn_delay = SPAWN_DELAY;
@@ -670,21 +766,26 @@ int main(int argc, char *argv[]) {
 
     while(1) {
         if (player->health == 0) {
-            printf("GAME OVER!!!\n");
-            break;
+            if (show_game_over_screen(renderer, score)) {
+                player = Spaceship_new_player_spaceship(renderer);
+                bullets_manager = BulletsManager_new();
+                score = 0;
+            } else {
+                break;
+            }
         }
-
 
         if (!handle_input(player)) { break; }
 
-        SDL_SetRenderDrawColor(renderer, 64, 64, 64, 255);
+        SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
-
+        render_stars(renderer);
 
         move_spaceships(player);
         BulletsManager_move_bullets(bullets_manager);
         Spaceship_fire(player, bullets_manager, renderer, false);
-        apply_bullet_hits(player, bullets_manager);
+        score += apply_bullet_hits(player, bullets_manager);
+        render_score(renderer, score);
         make_enemies_shoot(player, bullets_manager, renderer);
         if (spawn_delay == 0) {
             spawn_enemies(player, renderer);
@@ -699,6 +800,8 @@ int main(int argc, char *argv[]) {
             curr = curr->next;
         }
         BulletsManager_render_bullets(bullets_manager, renderer);
+
+        // render fps on screen, this method has accuracy to ms which is bad
         Uint32 diff = SDL_GetTicks() - ticks;
         if (diff != 0) {
             fps = 1000. / diff;
@@ -706,8 +809,9 @@ int main(int argc, char *argv[]) {
                 fps = MAX_FPS;
             }
         }
-        show_fps(renderer, font_texture, fps);
+        render_fps(renderer, fps);
         ticks = SDL_GetTicks();
+
         SDL_RenderPresent(renderer);
         cap_fps(MAX_FPS);
     }
