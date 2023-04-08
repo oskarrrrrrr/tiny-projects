@@ -1,15 +1,24 @@
 #include <SDL.h>
 #include <SDL_image.h>
+#include <SDL_mixer.h>
 #include <stdbool.h>
 #include <stdlib.h>
 
 #define DEBUG 0
+
+/* target FPS, the game mechanics are frame dependent, so changing
+ * this parameter requires changing most other parameters. The game
+ * won't work as expected when the MAX_FPS is not actually reached.
+ */
+#define MAX_FPS 60
 
 #define SCREEN_WIDTH 480
 #define SCREEN_HEIGHT 960
 
 #define SPACESHIP_WIDTH 55
 #define SPACESHIP_HEIGHT (SPACESHIP_WIDTH * 1.05)
+
+// player spaceship speed (pixels/frame)
 #define SPEED 2
 
 #define BULLET_DAMAGE 35
@@ -17,10 +26,12 @@
 #define BULLET_WIDTH 8
 #define BULLET_HEIGHT (BULLET_WIDTH * 3.3)
 #define MAX_BULLETS_NUM 50
-#define RELOAD_TIME 20
+#define RELOAD_TIME 30
 #define PLAYER_HEALTH 500
 
+// delay in frames between enemy spawnd
 #define SPAWN_DELAY 30
+// maximum number of enemies that spawn in one frame
 #define MAX_SPAWN 1
 #define ENEMIES_COUNT 8
 #define ENEMY_HEALTH 100
@@ -28,8 +39,6 @@
 #define STARS_MAX_SPEED 3
 #define STARS_COUNT 50
 #define STARS_SPEED_FACTOR 0
-
-#define MAX_FPS 60
 
 #define MIN(X,Y) ((X) < (Y) ? (X) : (Y))
 #define MAX(X,Y) ((X) > (Y) ? (X) : (Y))
@@ -60,6 +69,7 @@ void Entity_new_fill(
     entity->dy = dy;
     entity->rect = rect;
     entity->texture = texture;
+
 }
 
 Entity *Entity_new(double rotation, float dx, float dy, SDL_Rect rect, SDL_Texture *texture) {
@@ -93,6 +103,15 @@ void Entity_render(Entity *entity, SDL_Renderer *renderer) {
     }
 }
 
+typedef struct Spaceship {
+    Entity *entity;
+    Uint32 reload;  // frames left for reloading, can shoot whenever 0
+    bool fire;  // player wants to shoot
+    Uint32 max_health;
+    Uint32 health;
+    struct Spaceship *next; // the first spaceship should be the player
+} Spaceship;
+
 typedef Entity Bullet;
 
 void Bullet_new_fill(
@@ -101,7 +120,7 @@ void Bullet_new_fill(
     Entity_new_fill(bullet, rotation, dx, dy, rect, texture);
 }
 
-void Bullet_new_fill_regular_bullet(Bullet *bullet, SDL_Renderer *renderer, Uint32 x, Uint32 y, bool reverse) {
+void Bullet_new_fill_regular_bullet(Bullet *bullet, SDL_Renderer *renderer, Uint32 x, Uint32 y, bool reverse, Spaceship *spaceship) {
     static SDL_Texture *texture = NULL;
     if (texture == NULL) {
         texture = sdl_load_texture(renderer, "assets/laser.png");
@@ -110,6 +129,10 @@ void Bullet_new_fill_regular_bullet(Bullet *bullet, SDL_Renderer *renderer, Uint
     float bullet_speed = -BULLET_SPEED;
     if (reverse) { bullet_speed *= -1; }
     Bullet_new_fill(bullet, 0, 0, bullet_speed, rect, texture);
+
+    Mix_Chunk *bullet_sound = Mix_LoadWAV("assets/sounds/laser_6.wav");
+    if (!bullet_sound) { sdl_fail(); }
+    int channel = Mix_PlayChannel(-1, bullet_sound, 0);
 }
 
 void Bullet_destroy(Bullet *bullet) {
@@ -137,14 +160,16 @@ void BulletsManager_destroy(BulletsManager *bullets_manager) {
 }
 
 void BulletsManager_add_bullet(
-    BulletsManager *bullets, SDL_Renderer *renderer, SDL_Rect *spaceship_rect, bool reverse
+    BulletsManager *bullets, SDL_Renderer *renderer, Spaceship *spaceship, bool reverse
 ) {
+    SDL_Rect *spaceship_rect = &spaceship->entity->rect;
     Bullet_new_fill_regular_bullet(
         &bullets->objs[bullets->tail],
         renderer,
         spaceship_rect->x + (spaceship_rect->w / 2.) - (BULLET_WIDTH / 2.),
         reverse ? spaceship_rect->y + spaceship_rect->h : spaceship_rect->y - BULLET_HEIGHT,
-        reverse
+        reverse,
+        spaceship
     );
     bullets->used[bullets->tail] = true;
     bullets->tail = (bullets->tail + 1) % MAX_BULLETS_NUM;
@@ -185,15 +210,6 @@ void BulletsManager_render_bullets(BulletsManager *bullets, SDL_Renderer *render
         }
     }
 }
-
-typedef struct Spaceship {
-    Entity *entity;
-    Uint32 reload;  // frames left for reloading, can shoot whenever 0
-    bool fire;  // player wants to shoot
-    Uint32 max_health;
-    Uint32 health;
-    struct Spaceship *next; // the first spaceship should be the player
-} Spaceship;
 
 Spaceship *Spaceship_new(Entity *entity, Uint32 health) {
     Spaceship *ss = malloc(sizeof(Spaceship));
@@ -245,7 +261,7 @@ void Spaceship_decrease_reload_counter(Spaceship *spaceship) {
 void Spaceship_fire(Spaceship *spaceship, BulletsManager *bullets, SDL_Renderer *renderer, bool reverse) {
     Spaceship_decrease_reload_counter(spaceship);
     if (spaceship->fire && spaceship->reload == 0) {
-        BulletsManager_add_bullet(bullets, renderer, &spaceship->entity->rect, reverse);
+        BulletsManager_add_bullet(bullets, renderer, spaceship, reverse);
         spaceship->reload = RELOAD_TIME;
     }
 }
@@ -318,6 +334,9 @@ Explosion *Explosion_new(int x, int y, float start_scale, float peak_scale, int 
     explosion->peak_step = peak_step;
     explosion->texture = texture;
     explosion->next = NULL;
+    Mix_Chunk *explosion_sound = Mix_LoadWAV("assets/sounds/explosion_2.wav");
+    if (!explosion_sound) { sdl_fail(); }
+    Mix_PlayChannel(-1, explosion_sound, 0);
     return explosion;
 }
 
@@ -555,7 +574,7 @@ void move_spaceships(Spaceship *spaceship, Explosion **explosions, SDL_Renderer 
     }
 }
 
-static void initialize_sdl(SDL_Window *window, SDL_Renderer *renderer) {
+static void initialize_sdl(void) {
 /* void initialize_sdl() { */
     if (SDL_Init(SDL_INIT_VIDEO) < 0) {
         sdl_fail();
@@ -803,12 +822,26 @@ void render_stars(SDL_Renderer *renderer) {
     }
 }
 
-void render_fps(SDL_Renderer *renderer, Uint32 fps) {
+/* Render FPS in the top right corner with ms accuracy
+ * TODO: improve accuray so that we can have more than 1000FPS */
+void render_fps(SDL_Renderer *renderer) {
+    static Uint32 ticks = 0, fps = 0;
+    if (ticks == 0) {
+        ticks = SDL_GetTicks();
+    }
+    Uint32 diff = SDL_GetTicks() - ticks;
+    if (diff != 0) {
+        fps = 1000. / diff;
+        if (fps > MAX_FPS) {
+            fps = MAX_FPS;
+        }
+    }
     char fps_str[20]; sprintf(fps_str, "fps: %d", fps);
     Text text = {fps_str, 0, 10, 1./2, &ken_pixel_font};
     Uint32 width = Text_calculate_width(&text);
     text.x = SCREEN_WIDTH - width - 10;
     Text_write_to_screen(renderer, &text);
+    ticks = SDL_GetTicks();
 }
 
 void render_score(SDL_Renderer *renderer, Uint32 score) {
@@ -863,13 +896,8 @@ bool show_game_over_screen(SDL_Renderer *renderer, Uint32 score) {
 }
 
 int main(int argc, char *argv[]) {
-
-    SDL_Window *window;
-    SDL_Renderer *renderer;
-
-    initialize_sdl(window, renderer);
-
-    window = SDL_CreateWindow(
+    initialize_sdl();
+    SDL_Window *window = SDL_CreateWindow(
         "Spaceship",
         SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
         SCREEN_WIDTH, SCREEN_HEIGHT, 0
@@ -877,8 +905,12 @@ int main(int argc, char *argv[]) {
     if (!window) { sdl_fail(); }
     // TODO: move window and renderer initialization to `initialize_sdl`
     // (for some reason it doesn't work properly when I move it...)
-    renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
+    SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
     if (!renderer) { sdl_fail(); }
+
+    if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 4096)) {
+        sdl_fail();
+    }
 
     // initialize game
     Spaceship *player = Spaceship_new_player_spaceship(renderer);
@@ -888,11 +920,12 @@ int main(int argc, char *argv[]) {
 
     Spaceship *curr = player;
     Uint32 spawn_delay = SPAWN_DELAY;
-    Uint32 ticks = SDL_GetTicks();
-    Uint32 fps = MAX_FPS;
 
     while(1) {
         if (Spaceship_is_dead(player)) {
+            Mix_Chunk *game_over_sound = Mix_LoadWAV("assets/sounds/powerups_7.wav");
+            if (!game_over_sound) { sdl_fail(); }
+            Mix_PlayChannel(-1, game_over_sound, 0);
             if (show_game_over_screen(renderer, score)) {
                 player = Spaceship_new_player_spaceship(renderer);
                 bullets_manager = BulletsManager_new();
@@ -931,16 +964,7 @@ int main(int argc, char *argv[]) {
         explosions = Explosion_step(explosions, renderer);
         BulletsManager_render_bullets(bullets_manager, renderer);
 
-        // render fps on screen, this method has accuracy to ms which is bad
-        Uint32 diff = SDL_GetTicks() - ticks;
-        if (diff != 0) {
-            fps = 1000. / diff;
-            if (fps > MAX_FPS) {
-                fps = MAX_FPS;
-            }
-        }
-        render_fps(renderer, fps);
-        ticks = SDL_GetTicks();
+        render_fps(renderer);
 
         SDL_RenderPresent(renderer);
         cap_fps(MAX_FPS);
