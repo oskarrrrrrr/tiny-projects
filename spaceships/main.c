@@ -6,9 +6,10 @@
 
 #define DEBUG 0
 
-/* target FPS, the game mechanics are frame dependent, so changing
+/**
+ * Max/target FPS. The game mechanics are frame dependent so changing
  * this parameter requires changing most other parameters. The game
- * won't work as expected when the MAX_FPS is not actually reached.
+ * might not work as expected when the MAX_FPS is not actually reached.
  */
 #define MAX_FPS 60
 
@@ -43,16 +44,88 @@
 #define MIN(X,Y) ((X) < (Y) ? (X) : (Y))
 #define MAX(X,Y) ((X) > (Y) ? (X) : (Y))
 
+/*** SDL Utilities ***/
+
 void sdl_fail() {
     printf("SDL ERROR: %s\n", SDL_GetError());
     exit(1);
 }
 
-SDL_Texture *sdl_load_texture(SDL_Renderer *renderer, char *file_name) {
-    SDL_Texture *texture = IMG_LoadTexture(renderer, file_name);
-    if (texture == NULL) { sdl_fail(); }
-    return texture;
+/*** Texture Cache ***/
+
+typedef enum {
+    TEXTURE_FONT_KEN_PIXEL_WHITE,
+    TEXTURE_EXPLOSION,
+    TEXTURE_LASER,
+    TEXTURE_FIREBALL,
+    TEXTURE_SPACESHIP,
+    TEXTURE_END_MARKER // the number of available textures
+} TextureType;
+
+static char *TEXTURE_FILE_NAMES[TEXTURE_END_MARKER] = {
+    "assets/KenPixelWhite.png",
+    "assets/explosion.png",
+    "assets/laser.png",
+    "assets/fireball.png",
+    "assets/spaceship.png",
+};
+
+/**
+ * Do not access these variables directly, use functions starting with 'TexturesCache'.
+ */
+static SDL_Texture *_textures_cache[TEXTURE_END_MARKER];
+static bool _textures_cache_initialized = false;
+
+/**
+ * Initialize the texture cache. Is called automatically on the first call to
+ * `TexturesCache_get`.
+ */
+void TexturesCache_initialize() {
+    for (int i = 0; i < TEXTURE_END_MARKER; i++) {
+        _textures_cache[i] = NULL;
+    }
+    _textures_cache_initialized = true;
 }
+
+/**
+ * This function clears the cache. Make sure to call it before the program ends
+ * so that all the textures can be destroyed.
+ */
+void TexturesCache_destroy() {
+    if (!_textures_cache_initialized) {
+        return;
+    }
+    for (int i = 0; i < TEXTURE_END_MARKER; i++) {
+        if (_textures_cache[i] != NULL) {
+            SDL_DestroyTexture(_textures_cache[i]);
+            _textures_cache[i] = NULL;
+        }
+    }
+    _textures_cache_initialized = false;
+}
+
+/**
+ * Get a texture by `TextureType`. Textures cache will be initialized if was not
+ * already initialized.
+ */
+SDL_Texture *TexturesCache_get(SDL_Renderer *renderer, TextureType texture_type) {
+    if (!_textures_cache_initialized) {
+        TexturesCache_initialize();
+    }
+    if (_textures_cache[texture_type] != NULL) {
+        return _textures_cache[texture_type];
+    }
+    _textures_cache[texture_type] = IMG_LoadTexture(
+        renderer,
+        TEXTURE_FILE_NAMES[texture_type]
+    );
+    if (_textures_cache[texture_type] == NULL) {
+        sdl_fail();
+    }
+    return _textures_cache[texture_type];
+}
+
+/*** Entities ***/
 
 typedef struct {
     double rotation; // rotation in degrees
@@ -120,15 +193,22 @@ void Bullet_new_fill(
     Entity_new_fill(bullet, rotation, dx, dy, rect, texture);
 }
 
-void Bullet_new_fill_regular_bullet(Bullet *bullet, SDL_Renderer *renderer, Uint32 x, Uint32 y, bool reverse, Spaceship *spaceship) {
-    static SDL_Texture *texture = NULL;
-    if (texture == NULL) {
-        texture = sdl_load_texture(renderer, "assets/laser.png");
-    }
+void Bullet_new_fill_regular_bullet(
+    Bullet *bullet,
+    SDL_Renderer *renderer,
+    Uint32 x,
+    Uint32 y,
+    bool reverse,
+    Spaceship *spaceship
+) {
     SDL_Rect rect = {x, y, BULLET_WIDTH, BULLET_HEIGHT};
     float bullet_speed = -BULLET_SPEED;
-    if (reverse) { bullet_speed *= -1; }
-    Bullet_new_fill(bullet, 0, 0, bullet_speed, rect, texture);
+    if (reverse) {
+        bullet_speed *= -1;
+    }
+    Bullet_new_fill(
+        bullet, 0, 0, bullet_speed, rect, TexturesCache_get(renderer, TEXTURE_LASER)
+    );
 
     Mix_Chunk *bullet_sound = Mix_LoadWAV("assets/sounds/laser_6.wav");
     if (!bullet_sound) { sdl_fail(); }
@@ -222,14 +302,15 @@ Spaceship *Spaceship_new(Entity *entity, Uint32 health) {
 }
 
 Spaceship *Spaceship_new_player_spaceship(SDL_Renderer *renderer) {
-    SDL_Texture *texture = sdl_load_texture(renderer, "assets/spaceship.png");
     SDL_Rect rect = {
         (SCREEN_WIDTH - SPACESHIP_WIDTH) / 2,
         SCREEN_HEIGHT / 5. * 4,
         SPACESHIP_WIDTH,
         SPACESHIP_HEIGHT
     };
-    Entity *entity = Entity_new(0, 0, 0, rect, texture);
+    Entity *entity = Entity_new(
+        0, 0, 0, rect, TexturesCache_get(renderer, TEXTURE_SPACESHIP)
+    );
     return Spaceship_new(entity, PLAYER_HEALTH);
 }
 
@@ -404,7 +485,7 @@ Explosion *get_spaceship_explosion(SDL_Renderer *renderer, Spaceship *spaceship)
         0.1,
         1.5,
         30,
-        sdl_load_texture(renderer, "assets/explosion.png")
+        TexturesCache_get(renderer, TEXTURE_EXPLOSION)
     );
 }
 
@@ -490,7 +571,6 @@ void spawn_enemies(Spaceship *spaceship, SDL_Renderer *renderer) {
     }
 
     curr = last;
-    SDL_Texture *texture = sdl_load_texture(renderer, "assets/spaceship.png");
     Uint32 enemies_to_spawn = MIN(ENEMIES_COUNT - count, MAX_SPAWN);
     for (int i = 0; i < enemies_to_spawn; i++) {
         SDL_Rect rect;
@@ -498,7 +578,7 @@ void spawn_enemies(Spaceship *spaceship, SDL_Renderer *renderer) {
         rect.h = SPACESHIP_HEIGHT / 1.5;
         rect.x = rand() % (SCREEN_WIDTH - rect.w);
         rect.y = -rect.h;
-        Entity *entity = Entity_new(180, 0, 1, rect, texture);
+        Entity *entity = Entity_new(180, 0, 1, rect, TexturesCache_get(renderer, TEXTURE_SPACESHIP));
         curr->next = Spaceship_new(entity, ENEMY_HEALTH);
         curr = curr->next;
     }
@@ -637,7 +717,7 @@ typedef struct {
     FontChar *font_chars;
     char first_char;
     char last_char;
-    char *texture_file_name;
+    TextureType texture_type;
 } Font;
 
 FontChar ken_pixel_font_chars[] = {
@@ -737,7 +817,7 @@ FontChar ken_pixel_font_chars[] = {
         {'}', {204, 325, 28, 54}}
     };
 
-Font ken_pixel_font = {ken_pixel_font_chars, ' ', '}', "assets/KenPixelWhite.png" };
+Font ken_pixel_font = {ken_pixel_font_chars, ' ', '}', TEXTURE_FONT_KEN_PIXEL_WHITE};
 
 typedef struct {
     char *text;
@@ -766,7 +846,6 @@ Uint32 Text_calculate_height(Text *text) {
 
 void Text_write_to_screen(SDL_Renderer *renderer, Text *text) {
     Font *font = text->font;
-    SDL_Texture *texture = sdl_load_texture(renderer, font->texture_file_name);
     char c;
     int i = 0, w = text->x;
     while ((c = text->text[i++]) != '\0') {
@@ -779,7 +858,7 @@ void Text_write_to_screen(SDL_Renderer *renderer, Text *text) {
         dst_rect.y = text->y;
         dst_rect.w = src_rect->w * text->scale;
         dst_rect.h = src_rect->h * text->scale;
-        SDL_RenderCopy(renderer, texture, src_rect, &dst_rect);
+        SDL_RenderCopy(renderer, TexturesCache_get(renderer, text->font->texture_type), src_rect, &dst_rect);
         w += dst_rect.w;
     }
 }
@@ -912,6 +991,8 @@ int main(int argc, char *argv[]) {
         sdl_fail();
     }
 
+    TexturesCache_initialize();
+
     // initialize game
     Spaceship *player = Spaceship_new_player_spaceship(renderer);
     BulletsManager *bullets_manager = BulletsManager_new();
@@ -970,6 +1051,7 @@ int main(int argc, char *argv[]) {
         cap_fps(MAX_FPS);
     }
 
+    TexturesCache_destroy();
     Spaceship_destroy(player);
     BulletsManager_destroy(bullets_manager);
     SDL_DestroyRenderer(renderer);
