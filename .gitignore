@@ -1,3 +1,4 @@
 spaceships/spaceships
 .DS_Store
 *.dSym
+.clangd

@@ -18,7 +18,7 @@
 #define BULLET_HEIGHT (BULLET_WIDTH * 3.3)
 #define MAX_BULLETS_NUM 50
 #define RELOAD_TIME 20
-#define PLAYER_HEALTH 100
+#define PLAYER_HEALTH 500
 
 #define SPAWN_DELAY 30
 #define MAX_SPAWN 1
@@ -106,11 +106,7 @@ void Bullet_new_fill_regular_bullet(Bullet *bullet, SDL_Renderer *renderer, Uint
     if (texture == NULL) {
         texture = sdl_load_texture(renderer, "assets/laser.png");
     }
-    SDL_Rect rect;
-    rect.x = x;
-    rect.y = y;
-    rect.w = BULLET_WIDTH;
-    rect.h = BULLET_HEIGHT;
+    SDL_Rect rect = {x, y, BULLET_WIDTH, BULLET_HEIGHT};
     float bullet_speed = -BULLET_SPEED;
     if (reverse) { bullet_speed *= -1; }
     Bullet_new_fill(bullet, 0, 0, bullet_speed, rect, texture);
@@ -196,7 +192,7 @@ typedef struct Spaceship {
     bool fire;  // player wants to shoot
     Uint32 max_health;
     Uint32 health;
-    struct Spaceship *next;
+    struct Spaceship *next; // the first spaceship should be the player
 } Spaceship;
 
 Spaceship *Spaceship_new(Entity *entity, Uint32 health) {
@@ -211,11 +207,12 @@ Spaceship *Spaceship_new(Entity *entity, Uint32 health) {
 
 Spaceship *Spaceship_new_player_spaceship(SDL_Renderer *renderer) {
     SDL_Texture *texture = sdl_load_texture(renderer, "assets/spaceship.png");
-    SDL_Rect rect;
-    rect.x = (SCREEN_WIDTH - SPACESHIP_WIDTH) / 2;
-    rect.y = SCREEN_HEIGHT / 5. * 4;
-    rect.w = SPACESHIP_WIDTH;
-    rect.h = SPACESHIP_HEIGHT;
+    SDL_Rect rect = {
+        (SCREEN_WIDTH - SPACESHIP_WIDTH) / 2,
+        SCREEN_HEIGHT / 5. * 4,
+        SPACESHIP_WIDTH,
+        SPACESHIP_HEIGHT
+    };
     Entity *entity = Entity_new(0, 0, 0, rect, texture);
     return Spaceship_new(entity, PLAYER_HEALTH);
 }
@@ -223,6 +220,19 @@ Spaceship *Spaceship_new_player_spaceship(SDL_Renderer *renderer) {
 void Spaceship_destroy(Spaceship *spaceship) {
     Entity_destroy(spaceship->entity);
     free(spaceship);
+}
+
+bool Spaceship_is_dead(Spaceship *spaceship) {
+    return spaceship->health == 0;
+}
+
+
+void Spaceship_take_damage(Spaceship *spaceship, Uint32 damage) {
+    if (spaceship->health >= damage) {
+        spaceship->health -= damage;
+    } else {
+        spaceship->health = 0;
+    }
 }
 
 void Spaceship_decrease_reload_counter(Spaceship *spaceship) {
@@ -288,18 +298,107 @@ char *Rect_to_str(SDL_Rect rect) {
     return result;
 }
 
-Uint32 apply_bullet_hits(Spaceship *spaceship, BulletsManager *bullets_manager) {
+typedef struct Explosion {
+    int x, y;
+    float start_scale;
+    float peak_scale;
+    int current_step;
+    int peak_step;
+    SDL_Texture *texture;
+    struct Explosion *next;
+} Explosion;
+
+Explosion *Explosion_new(int x, int y, float start_scale, float peak_scale, int peak_step, SDL_Texture *texture) {
+    Explosion *explosion = malloc(sizeof(Explosion));
+    explosion->x = x;
+    explosion->y = y;
+    explosion->start_scale = start_scale;
+    explosion->peak_scale = peak_scale;
+    explosion->current_step = 0;
+    explosion->peak_step = peak_step;
+    explosion->texture = texture;
+    explosion->next = NULL;
+    return explosion;
+}
+
+void Explosion_destroy(Explosion *explosion) {
+    free(explosion);
+}
+
+float Explosion_get_scale_for_next_step(Explosion *explosion) {
+    if (explosion->current_step < explosion->peak_step) {
+        return explosion->start_scale + (explosion->current_step * (explosion->peak_scale - explosion->start_scale) / explosion->peak_step);
+    } else if (explosion->current_step == explosion->peak_step) {
+        return explosion->peak_scale;
+    } else {
+        return explosion->peak_scale - ((explosion->current_step - explosion->peak_step) * (explosion->peak_scale - explosion->start_scale) / explosion->peak_step);
+    }
+}
+
+Explosion *Explosion_step(Explosion *explosions, SDL_Renderer *renderer) {
+    Explosion *curr = explosions, *prev = NULL, *return_ = explosions;
+    while (curr != NULL) {
+        curr->current_step++;
+        if (curr->current_step > curr->peak_step) {
+            if (prev == NULL) {
+                prev = curr->next;
+                return_ = prev;
+            } else {
+                prev->next = curr->next;
+            }
+            Explosion_destroy(curr);
+            curr = NULL;
+        } else {
+            SDL_Rect dst_rect;
+            SDL_QueryTexture(curr->texture, NULL, NULL, &dst_rect.w, &dst_rect.h);
+            float scale = Explosion_get_scale_for_next_step(curr);
+            dst_rect.w *= scale;
+            dst_rect.h *= scale;
+            dst_rect.x = curr->x - (dst_rect.w / 2.);
+            dst_rect.y = curr->y - (dst_rect.h / 2.);
+            SDL_RenderCopy(renderer, curr->texture, NULL, &dst_rect);
+        }
+        prev = curr;
+        if (curr != NULL) {
+            curr = curr->next;
+        }
+    }
+    return return_;
+}
+
+void Explosion_add(Explosion **explosions, Explosion *new_explosion) {
+    if (*explosions == NULL) {
+        *explosions = new_explosion;
+    } else {
+        Explosion *curr = *explosions;
+        while (curr->next != NULL) {
+            curr = curr->next;
+        }
+        curr->next = new_explosion;
+    }
+}
+
+Explosion *get_spaceship_explosion(SDL_Renderer *renderer, Spaceship *spaceship) {
+    return Explosion_new(
+        spaceship->entity->rect.x + (spaceship->entity->rect.w / 2.),
+        spaceship->entity->rect.y + (spaceship->entity->rect.h / 2.),
+        0.1,
+        1.5,
+        30,
+        sdl_load_texture(renderer, "assets/explosion.png")
+    );
+}
+
+Uint32 apply_bullet_hits(SDL_Renderer *renderer, Spaceship *spaceship, BulletsManager *bullets_manager, Explosion **explosions) {
     Uint32 killed = 0;
-    Spaceship *prev = NULL, *curr = spaceship;
+    Spaceship *curr = spaceship;
     while (curr != NULL) {
         for (
             size_t i = bullets_manager->head;
             i != bullets_manager->tail;
             i = (i + 1) % MAX_BULLETS_NUM
         ) {
-            if (!bullets_manager->used[i]) {
-                continue;
-            }
+            if (!bullets_manager->used[i]) { continue; }
             SDL_Rect *ship_rect = &curr->entity->rect;
             SDL_Rect *bullet_rect = &bullets_manager->objs[i].rect;
             if (SDL_HasIntersection(ship_rect, bullet_rect)) {
@@ -309,29 +408,38 @@ Uint32 apply_bullet_hits(Spaceship *spaceship, BulletsManager *bullets_manager) 
                 } else {
                     bullet_damage = BULLET_DAMAGE - (rand() % BULLET_DAMAGE / 3);
                 }
-                if (curr->health > bullet_damage) {
-                    curr->health -= bullet_damage;
-                } else {
-                    curr->health = 0;
-                }
-                if (curr->health == 0) {
-                    if (prev == NULL) {
-                        return killed;
-                    } else {
-                        killed++;
-                        prev->next = curr->next;
-                        Spaceship_destroy(curr);
-                        curr = prev->next;
-                        if (curr == NULL) {
-                            break;
-                        }
-                    }
-                }
+                Spaceship_take_damage(curr, bullet_damage);
                 bullets_manager->used[i] = false;
             }
         }
-        prev = curr;
-        if (curr != NULL) {
+        curr = curr->next;
+    }
+    return killed;
+}
+
+/* Remove any spaceships (except for the player) with 0 health and generate explosions for them.
+ * Returns the number of killed ships (excluding the player).
+ */
+Uint32 Spaceship_clean_up(Spaceship *spaceships, Explosion **explosions, SDL_Renderer *renderer) {
+    Uint32 killed = 0;
+    Spaceship *curr = spaceships, *prev = NULL;
+    while (curr != NULL) {
+        if (Spaceship_is_dead(curr) && curr != spaceships) {
+            killed++;
+            Explosion *new_explosion = get_spaceship_explosion(renderer, curr);
+            Explosion_add(explosions, new_explosion);
+            // prev is not NULL because we skip the player which is always the first element of the list
+            prev->next = curr->next;
+            Spaceship_destroy(curr);
+            if (prev->next == NULL) {
+                prev = prev->next;
+                curr = NULL;
+            } else {
+                prev = prev->next;
+                curr = prev->next;
+            }
+        } else {
+            prev = curr;
             curr = curr->next;
         }
     }
@@ -413,9 +521,9 @@ void make_enemies_shoot(Spaceship *spaceship, BulletsManager *bullets_manager, S
     }
 }
 
-void move_spaceships(Spaceship *spaceship) {
-    Spaceship *curr = spaceship;
-    while(curr != NULL) {
+void move_spaceships(Spaceship *spaceship, Explosion **explosions, SDL_Renderer *renderer) {
+    Spaceship *curr = spaceship, *other;
+    while (curr != NULL) {
         Entity_move(curr->entity);
         curr = curr->next;
     }
@@ -425,6 +533,26 @@ void move_spaceships(Spaceship *spaceship) {
     player_r->x = MIN(player_r->x, SCREEN_WIDTH - (player_r->w / 2.));
     player_r->y = MAX(player_r->y, -(player_r->h / 2.));
     player_r->y = MIN(player_r->y, SCREEN_HEIGHT - player_r->h);
+    // apply damage for spaceships that collide
+    curr = spaceship;
+    while (curr != NULL) {
+        if (Spaceship_is_dead(curr)) {
+            curr=curr->next;
+            continue;
+        }
+        other = spaceship;
+        while (other != NULL) {
+            if (curr != other && !Spaceship_is_dead(other)) {
+                if (SDL_HasIntersection(&curr->entity->rect, &other->entity->rect)) {
+                    Uint32 damage = MIN(curr->health, other->health);
+                    Spaceship_take_damage(curr, damage);
+                    Spaceship_take_damage(other, damage);
+                }
+            }
+            other = other->next;
+        }
+        curr = curr->next;
+    }
 }
 
 static void initialize_sdl(SDL_Window *window, SDL_Renderer *renderer) {
@@ -643,9 +771,6 @@ typedef struct {
 } Star;
 
 int rand_star_speed() {
-    /* int speed; */
-    /* while ((speed = 1 + (rand() % (STARS_MAX_SPEED - 1))) == 1); */
-    /* return speed; */
     return 1 + (rand() % STARS_MAX_SPEED);
 }
 
@@ -689,8 +814,10 @@ void render_fps(SDL_Renderer *renderer, Uint32 fps) {
 void render_score(SDL_Renderer *renderer, Uint32 score) {
     char score_str[10]; sprintf(score_str, "%d", score);
     Text score_text = { score_str, 0, 0, 1.5, &ken_pixel_font };
-    score_text.x = (SCREEN_WIDTH - Text_calculate_width(&score_text)) / 2.;
-    score_text.y = (SCREEN_HEIGHT - Text_calculate_height(&score_text)) / 2.;
+    Uint32 width = Text_calculate_width(&score_text);
+    Uint32 height = Text_calculate_height(&score_text);
+    score_text.x = (SCREEN_WIDTH - width) / 2.;
+    score_text.y = (SCREEN_HEIGHT - height) / 2.;
     Text_write_to_screen(renderer, &score_text);
 }
 
@@ -736,7 +863,6 @@ bool show_game_over_screen(SDL_Renderer *renderer, Uint32 score) {
 }
 
 int main(int argc, char *argv[]) {
-    srand(12);
 
     SDL_Window *window;
     SDL_Renderer *renderer;
@@ -758,6 +884,7 @@ int main(int argc, char *argv[]) {
     Spaceship *player = Spaceship_new_player_spaceship(renderer);
     BulletsManager *bullets_manager = BulletsManager_new();
     Uint32 score = 0;
+    Explosion *explosions = NULL;
 
     Spaceship *curr = player;
     Uint32 spawn_delay = SPAWN_DELAY;
@@ -765,10 +892,11 @@ int main(int argc, char *argv[]) {
     Uint32 fps = MAX_FPS;
 
     while(1) {
-        if (player->health == 0) {
+        if (Spaceship_is_dead(player)) {
             if (show_game_over_screen(renderer, score)) {
                 player = Spaceship_new_player_spaceship(renderer);
                 bullets_manager = BulletsManager_new();
+                explosions = NULL;
                 score = 0;
             } else {
                 break;
@@ -781,10 +909,11 @@ int main(int argc, char *argv[]) {
         SDL_RenderClear(renderer);
         render_stars(renderer);
 
-        move_spaceships(player);
+        move_spaceships(player, &explosions, renderer);
         BulletsManager_move_bullets(bullets_manager);
         Spaceship_fire(player, bullets_manager, renderer, false);
-        score += apply_bullet_hits(player, bullets_manager);
+        apply_bullet_hits(renderer, player, bullets_manager, &explosions);
+        score += Spaceship_clean_up(player, &explosions, renderer);
         render_score(renderer, score);
         make_enemies_shoot(player, bullets_manager, renderer);
         if (spawn_delay == 0) {
@@ -799,6 +928,7 @@ int main(int argc, char *argv[]) {
             Spaceship_render(curr, renderer);
             curr = curr->next;
         }
+        explosions = Explosion_step(explosions, renderer);
         BulletsManager_render_bullets(bullets_manager, renderer);
 
         // render fps on screen, this method has accuracy to ms which is bad
