@@ -8,8 +8,9 @@
 
 /**
  * Max/target FPS. The game mechanics are frame dependent so changing
- * this parameter requires changing most other parameters. The game
- * might not work as expected when the MAX_FPS is not actually reached.
+ * this parameter might require changing other parameters to preserve
+ * the gameplay thempo. The game might not work as expected when
+ * the MAX_FPS is not actually reached.
  */
 #define MAX_FPS 60
 
@@ -20,7 +21,8 @@
 #define SPACESHIP_HEIGHT (SPACESHIP_WIDTH * 1.05)
 
 // player spaceship speed (pixels/frame)
-#define SPEED 2
+#define PLAYER_SPEED 2
+#define PLAYER_HEALTH 500
 
 #define BULLET_DAMAGE 35
 #define BULLET_SPEED 10
@@ -28,7 +30,6 @@
 #define BULLET_HEIGHT (BULLET_WIDTH * 3.3)
 #define MAX_BULLETS_NUM 50
 #define RELOAD_TIME 30
-#define PLAYER_HEALTH 500
 
 // delay in frames between enemy spawnd
 #define SPAWN_DELAY 30
@@ -37,18 +38,73 @@
 #define ENEMIES_COUNT 8
 #define ENEMY_HEALTH 100
 
+/* Stars */
 #define STARS_MAX_SPEED 3
 #define STARS_COUNT 50
-#define STARS_SPEED_FACTOR 0
 
-#define MIN(X,Y) ((X) < (Y) ? (X) : (Y))
-#define MAX(X,Y) ((X) > (Y) ? (X) : (Y))
+/* Utilities */
+#define MIN(a, b)             \
+({                            \
+    __typeof__ (a) __a = (a); \
+    __typeof__ (b) __b = (b); \
+    __a < __b ? __a : __b;    \
+})
+#define MAX(a, b)             \
+({                            \
+    __typeof__ (a) __a = (a); \
+    __typeof__ (b) __b = (b); \
+    __a > __b ? __a : __b;    \
+})
 
 /*** SDL Utilities ***/
 
 void sdl_fail() {
     printf("SDL ERROR: %s\n", SDL_GetError());
     exit(1);
+}
+
+char *sdl_rect_to_str(SDL_Rect rect) {
+    char *result = calloc(100, sizeof(char));
+    sprintf(result, "(x, y): (%d, %d), (w, h): (%d, %d)", rect.x, rect.y, rect.w, rect.h);
+    return result;
+}
+
+void sdl_init(SDL_Window **window, SDL_Renderer **renderer) {
+    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
+        sdl_fail();
+    }
+
+    // nearest is better for pixel art (other is "linear"
+    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
+
+    if (IMG_Init(IMG_INIT_PNG) == 0) {
+        sdl_fail();
+    }
+
+    if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 4096)) {
+        sdl_fail();
+    }
+
+    *window = SDL_CreateWindow(
+        "Spaceship",
+        SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
+        SCREEN_WIDTH, SCREEN_HEIGHT, 0
+    );
+    if (!*window) {
+        sdl_fail();
+    }
+
+    *renderer = SDL_CreateRenderer(*window, -1, SDL_RENDERER_ACCELERATED);
+    if (!*renderer) {
+        sdl_fail();
+    }
+}
+
+void sdl_destroy(SDL_Window *window, SDL_Renderer *renderer) {
+    SDL_DestroyRenderer(renderer);
+    SDL_DestroyWindow(window);
+    IMG_Quit();
+    SDL_Quit();
 }
 
 /*** Texture Cache ***/
@@ -77,7 +133,7 @@ static SDL_Texture *_textures_cache[TEXTURE_END_MARKER];
 static bool _textures_cache_initialized = false;
 
 /**
- * Initialize the texture cache. Is called automatically on the first call to
+ * Initialize the texture cache. It is called automatically on the first call to
  * `TexturesCache_get`.
  */
 void TexturesCache_initialize() {
@@ -112,17 +168,84 @@ SDL_Texture *TexturesCache_get(SDL_Renderer *renderer, TextureType texture_type)
     if (!_textures_cache_initialized) {
         TexturesCache_initialize();
     }
-    if (_textures_cache[texture_type] != NULL) {
-        return _textures_cache[texture_type];
-    }
-    _textures_cache[texture_type] = IMG_LoadTexture(
-        renderer,
-        TEXTURE_FILE_NAMES[texture_type]
-    );
     if (_textures_cache[texture_type] == NULL) {
-        sdl_fail();
+        _textures_cache[texture_type] = IMG_LoadTexture(
+            renderer,
+            TEXTURE_FILE_NAMES[texture_type]
+        );
+        if (_textures_cache[texture_type] == NULL) {
+            sdl_fail();
+        }
     }
     return _textures_cache[texture_type];
+}
+
+/*** Sounds Cache ***/
+
+typedef enum {
+    SOUND_CHUNK_EXPLOSION,
+    SOUND_CHUNK_LASER,
+    SOUND_CHUNK_LOST,
+    SOUND_CHUNK_END_MARKER // the number of available textures
+} SoundChunkType;
+
+static char *SOUND_CHUNKS_FILE_NAMES[SOUND_CHUNK_END_MARKER] = {
+    "assets/sounds/explosion_2.wav",
+    "assets/sounds/laser_6.wav",
+    "assets/sounds/powerups_7.wav",
+};
+
+/**
+ * Do not access these variables directly, use functions starting with 'TexturesCache'.
+ */
+static Mix_Chunk *_chunks_cache[SOUND_CHUNK_END_MARKER];
+static bool _chunks_cache_initialized = false;
+
+/**
+ * Initialize the sound chunks cache. It is called automatically on the first call to
+ * `TexturesCache_get`.
+ */
+void SoundChunksCache_initialize() {
+    for (int i = 0; i < SOUND_CHUNK_END_MARKER; i++) {
+        _chunks_cache[i] = NULL;
+    }
+    _chunks_cache_initialized = true;
+}
+
+/**
+ * This function clears the cache. Make sure to call it before the program ends
+ * so that all the textures can be destroyed.
+ */
+void SoundChunksCache_destroy() {
+    if (!_chunks_cache_initialized) {
+        return;
+    }
+    for (int i = 0; i < TEXTURE_END_MARKER; i++) {
+        if (_chunks_cache[i] != NULL) {
+            Mix_FreeChunk(_chunks_cache[i]);
+            _chunks_cache[i] = NULL;
+        }
+    }
+    _chunks_cache_initialized = false;
+}
+
+/**
+ * Play a chunk by `SoundChunkType`. Sound chunks cache will be initialized if was not
+ * already initialized.
+ */
+void SoundChunkCache_play(SoundChunkType sound_chunk_type) {
+    if (!_chunks_cache_initialized) {
+        SoundChunksCache_initialize();
+    }
+    if (_chunks_cache[sound_chunk_type] == NULL) {
+        _chunks_cache[sound_chunk_type] = Mix_LoadWAV(
+            SOUND_CHUNKS_FILE_NAMES[sound_chunk_type]
+        );
+        if (_chunks_cache[sound_chunk_type] == NULL) {
+            sdl_fail();
+        }
+    }
+    Mix_PlayChannel(-1, _chunks_cache[sound_chunk_type], 0);
 }
 
 /*** Entities ***/
@@ -134,6 +257,9 @@ typedef struct {
     SDL_Texture *texture;
 } Entity;
 
+/**
+ * Initialize `Entity` using an existing struct. Useful when reusing structs.
+ */
 void Entity_new_fill(
     Entity *entity, double rotation, float dx, float dy, SDL_Rect rect, SDL_Texture *texture
 ) {
@@ -179,11 +305,13 @@ void Entity_render(Entity *entity, SDL_Renderer *renderer) {
 typedef struct Spaceship {
     Entity *entity;
     Uint32 reload;  // frames left for reloading, can shoot whenever 0
-    bool fire;  // player wants to shoot
+    bool fire;  // true if player/bot tries to shoot, false otherwise
     Uint32 max_health;
     Uint32 health;
-    struct Spaceship *next; // the first spaceship should be the player
+    struct Spaceship *next; // the first spaceship is always the player
 } Spaceship;
+
+/*** Bullet ***/
 
 typedef Entity Bullet;
 
@@ -209,15 +337,14 @@ void Bullet_new_fill_regular_bullet(
     Bullet_new_fill(
         bullet, 0, 0, bullet_speed, rect, TexturesCache_get(renderer, TEXTURE_LASER)
     );
-
-    Mix_Chunk *bullet_sound = Mix_LoadWAV("assets/sounds/laser_6.wav");
-    if (!bullet_sound) { sdl_fail(); }
-    int channel = Mix_PlayChannel(-1, bullet_sound, 0);
+    SoundChunkCache_play(SOUND_CHUNK_LASER);
 }
 
 void Bullet_destroy(Bullet *bullet) {
     free(bullet);
 }
+
+/*** Bullets Manager ***/
 
 typedef struct {
     Bullet objs[MAX_BULLETS_NUM];
@@ -290,6 +417,8 @@ void BulletsManager_render_bullets(BulletsManager *bullets, SDL_Renderer *render
         }
     }
 }
+
+/*** Spaceship ***/
 
 Spaceship *Spaceship_new(Entity *entity, Uint32 health) {
     Spaceship *ss = malloc(sizeof(Spaceship));
@@ -372,7 +501,6 @@ void Spaceship_render_healthbar(Spaceship *spaceship, SDL_Renderer *renderer) {
         SDL_SetRenderDrawColor(renderer, 255, 0, 0, 255);
     }
 
-    SDL_Rect healthbar;
     healthbar_empty.x = sr.x + (sr.w * 0.05) + 1;
     if(spaceship->entity->rotation == 0) {
         healthbar_empty.y = sr.y + sr.h + 10 + 1;
@@ -389,11 +517,21 @@ void Spaceship_render(Spaceship *spaceship, SDL_Renderer *renderer) {
     Spaceship_render_healthbar(spaceship, renderer);
 }
 
-char *Rect_to_str(SDL_Rect rect) {
-    char *result = calloc(100, sizeof(char));
-    sprintf(result, "(x, y): (%d, %d), (w, h): (%d, %d)", rect.x, rect.y, rect.w, rect.h);
-    return result;
+bool Spaceship_in_firing_range(Spaceship *shooter, Spaceship *victim, SDL_Renderer *renderer) {
+    SDL_Rect *shooter_r = &shooter->entity->rect, *victim_r = &victim->entity->rect;
+    SDL_Rect bullet_rect;
+    bullet_rect.x = shooter_r->x + (shooter_r->w / 2.) - (BULLET_WIDTH / 2.);
+    bullet_rect.y = shooter_r->y + shooter_r->h;
+    bullet_rect.w = BULLET_WIDTH;
+    bullet_rect.h = SCREEN_HEIGHT;
+    if (DEBUG) {
+        SDL_SetRenderDrawColor(renderer, 0, 0, 255, 255);
+        SDL_RenderDrawRect(renderer, &bullet_rect);
+    }
+    return SDL_HasIntersection(victim_r, &bullet_rect);
 }
+
+/*** Explosion ***/
 
 typedef struct Explosion {
     int x, y;
@@ -415,9 +553,7 @@ Explosion *Explosion_new(int x, int y, float start_scale, float peak_scale, int 
     explosion->peak_step = peak_step;
     explosion->texture = texture;
     explosion->next = NULL;
-    Mix_Chunk *explosion_sound = Mix_LoadWAV("assets/sounds/explosion_2.wav");
-    if (!explosion_sound) { sdl_fail(); }
-    Mix_PlayChannel(-1, explosion_sound, 0);
+    SoundChunkCache_play(SOUND_CHUNK_EXPLOSION);
     return explosion;
 }
 
@@ -584,20 +720,6 @@ void spawn_enemies(Spaceship *spaceship, SDL_Renderer *renderer) {
     }
 }
 
-bool Spaceship_in_firing_range(Spaceship *shooter, Spaceship *victim, SDL_Renderer *renderer) {
-    SDL_Rect *shooter_r = &shooter->entity->rect, *victim_r = &victim->entity->rect;
-    SDL_Rect bullet_rect;
-    bullet_rect.x = shooter_r->x + (shooter_r->w / 2.) - (BULLET_WIDTH / 2.);
-    bullet_rect.y = shooter_r->y + shooter_r->h;
-    bullet_rect.w = BULLET_WIDTH;
-    bullet_rect.h = SCREEN_HEIGHT;
-    if (DEBUG) {
-        SDL_SetRenderDrawColor(renderer, 0, 0, 255, 255);
-        SDL_RenderDrawRect(renderer, &bullet_rect);
-    }
-    return SDL_HasIntersection(victim_r, &bullet_rect);
-}
-
 void make_enemies_shoot(Spaceship *spaceship, BulletsManager *bullets_manager, SDL_Renderer *renderer) {
     Spaceship *curr = spaceship->next;
     while (curr != NULL) {
@@ -654,18 +776,6 @@ void move_spaceships(Spaceship *spaceship, Explosion **explosions, SDL_Renderer 
     }
 }
 
-static void initialize_sdl(void) {
-/* void initialize_sdl() { */
-    if (SDL_Init(SDL_INIT_VIDEO) < 0) {
-        sdl_fail();
-    }
-    // nearest is better for pixel art (other is "linear"
-    SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "nearest");
-
-    if (IMG_Init(IMG_INIT_PNG) == 0) {
-        sdl_fail();
-    }
-}
 
 bool handle_input(Spaceship *player) {
     SDL_Event event;
@@ -674,21 +784,51 @@ bool handle_input(Spaceship *player) {
             case SDL_QUIT:
                 return false;
             case SDL_KEYDOWN:
-                if (event.key.repeat != 0) break;
-                if (event.key.keysym.scancode == SDL_SCANCODE_Q) exit(0);
-                if (event.key.keysym.scancode == SDL_SCANCODE_UP) player->entity->dy -= SPEED;
-                if (event.key.keysym.scancode == SDL_SCANCODE_DOWN) player->entity->dy += SPEED;
-                if (event.key.keysym.scancode == SDL_SCANCODE_LEFT) player->entity->dx -= SPEED;
-                if (event.key.keysym.scancode == SDL_SCANCODE_RIGHT) player->entity->dx += SPEED;
-                if (event.key.keysym.scancode == SDL_SCANCODE_SPACE) player->fire = true;
+                if (event.key.repeat != 0) {
+                    break;
+                }
+                switch (event.key.keysym.scancode) {
+                    case SDL_SCANCODE_Q:
+                        return false;
+                    case SDL_SCANCODE_UP:
+                        player->entity->dy -= PLAYER_SPEED;
+                        break;
+                    case SDL_SCANCODE_DOWN:
+                        player->entity->dy += PLAYER_SPEED;
+                        break;
+                    case SDL_SCANCODE_LEFT:
+                        player->entity->dx -= PLAYER_SPEED;
+                        break;
+                    case SDL_SCANCODE_RIGHT:
+                        player->entity->dx += PLAYER_SPEED;
+                        break;
+                    case SDL_SCANCODE_SPACE:
+                        player->fire = true;
+                        break;
+                    default: ;
+                }
                 break;
             case SDL_KEYUP:
-                if (event.key.keysym.scancode == SDL_SCANCODE_UP) player->entity->dy += SPEED;
-                if (event.key.keysym.scancode == SDL_SCANCODE_DOWN) player->entity->dy -= SPEED;
-                if (event.key.keysym.scancode == SDL_SCANCODE_LEFT) player->entity->dx += SPEED;
-                if (event.key.keysym.scancode == SDL_SCANCODE_RIGHT) player->entity->dx -= SPEED;
-                if (event.key.keysym.scancode == SDL_SCANCODE_SPACE) player->fire = false;
+                switch (event.key.keysym.scancode) {
+                    case SDL_SCANCODE_UP:
+                        player->entity->dy += PLAYER_SPEED;
+                        break;
+                    case SDL_SCANCODE_DOWN:
+                        player->entity->dy -= PLAYER_SPEED;
+                        break;
+                    case SDL_SCANCODE_LEFT:
+                        player->entity->dx += PLAYER_SPEED;
+                        break;
+                    case SDL_SCANCODE_RIGHT:
+                        player->entity->dx -= PLAYER_SPEED;
+                        break;
+                    case SDL_SCANCODE_SPACE:
+                        player->fire = false;
+                        break;
+                    default: ;
+                }
                 break;
+            default: ;
         }
     }
     return true;
@@ -708,6 +848,8 @@ void cap_fps(Uint32 max_fps) {
     ticks = new_ticks;
 }
 
+/*** Fonts ***/
+
 typedef struct {
     char c;
     SDL_Rect rect; // rectangle on a texture with the character `c`
@@ -720,7 +862,7 @@ typedef struct {
     TextureType texture_type;
 } Font;
 
-FontChar ken_pixel_font_chars[] = {
+static FontChar ken_pixel_font_chars[] = {
         {' ', {0, 0, 11, 54}},
         {'!', {11, 0, 20, 54}},
         {'"', {31, 0, 28, 54}},
@@ -819,6 +961,8 @@ FontChar ken_pixel_font_chars[] = {
 
 Font ken_pixel_font = {ken_pixel_font_chars, ' ', '}', TEXTURE_FONT_KEN_PIXEL_WHITE};
 
+/*** Text ***/
+
 typedef struct {
     char *text;
     int x, y;
@@ -863,19 +1007,27 @@ void Text_write_to_screen(SDL_Renderer *renderer, Text *text) {
     }
 }
 
+/*** Star ***/
+
+/**
+ * Star intended to be used in background of the game.
+ */
 typedef struct {
     int x, y;
     int speed;
 } Star;
 
-int rand_star_speed() {
+static int rand_star_speed() {
     return 1 + (rand() % STARS_MAX_SPEED);
 }
 
+/**
+ * Call this function to render the stars in the background. Stars count
+ * and max speed can be adjusted by setting `STARS_COUNT` and `STARS_MAX_SPEED`.
+ */
 void render_stars(SDL_Renderer *renderer) {
     static Star stars[STARS_COUNT];
     static bool initialized = false;
-    static int skip = STARS_SPEED_FACTOR;
     if (!initialized) {
         for (int i = 0; i < STARS_COUNT; i++) {
             stars[i].x = rand() % SCREEN_WIDTH;
@@ -885,24 +1037,20 @@ void render_stars(SDL_Renderer *renderer) {
         initialized = true;
     }
     for (int i = 0; i < STARS_COUNT; i++) {
-        if (skip == 0) {
-            stars[i].y += stars[i].speed;
-            if (stars[i].y - stars[i].speed > SCREEN_HEIGHT) {
-                stars[i].y = 0;
-                stars[i].x = rand() % SCREEN_WIDTH;
-                stars[i].speed = rand_star_speed();
-            }
-            skip = STARS_SPEED_FACTOR;
-        } else {
-            skip--;
+        stars[i].y += stars[i].speed;
+        if (stars[i].y - stars[i].speed > SCREEN_HEIGHT) {
+            stars[i].y = 0;
+            stars[i].x = rand() % SCREEN_WIDTH;
+            stars[i].speed = rand_star_speed();
         }
         SDL_SetRenderDrawColor(renderer, 255, 255, 255, 255);
         SDL_RenderDrawLine(renderer, stars[i].x, stars[i].y, stars[i].x, stars[i].y - stars[i].speed);
     }
 }
 
-/* Render FPS in the top right corner with ms accuracy
- * TODO: improve accuray so that we can have more than 1000FPS */
+/**
+ * Render FPS in the top right corner with ms accuracy.
+ */
 void render_fps(SDL_Renderer *renderer) {
     static Uint32 ticks = 0, fps = 0;
     if (ticks == 0) {
@@ -923,6 +1071,9 @@ void render_fps(SDL_Renderer *renderer) {
     ticks = SDL_GetTicks();
 }
 
+/**
+ * Render score in the middle of the screen.
+ */
 void render_score(SDL_Renderer *renderer, Uint32 score) {
     char score_str[10]; sprintf(score_str, "%d", score);
     Text score_text = { score_str, 0, 0, 1.5, &ken_pixel_font };
@@ -933,117 +1084,132 @@ void render_score(SDL_Renderer *renderer, Uint32 score) {
     Text_write_to_screen(renderer, &score_text);
 }
 
+/**
+ * Shows the game over screen. Returns false if the user chooses to quit.
+ * Returns true if the user wants to play again.
+ */
 bool show_game_over_screen(SDL_Renderer *renderer, Uint32 score) {
     while (1) {
         SDL_Event event;
         while(SDL_PollEvent(&event)) {
-            switch(event.type) {
-                case SDL_QUIT:
-                    return false;
-                case SDL_KEYDOWN:
-                    if (event.key.repeat != 0) break;
-                    if (event.key.keysym.scancode == SDL_SCANCODE_Q) return false;
-                    if (event.key.keysym.scancode == SDL_SCANCODE_R) return true;
+            if (event.type == SDL_QUIT) {
+                return false;
+            }
+            if (event.type == SDL_KEYDOWN) {
+                if (event.key.repeat != 0) {
                     break;
+                }
+                if (event.key.keysym.scancode == SDL_SCANCODE_Q) {
+                    return false;
+                }
+                if (event.key.keysym.scancode == SDL_SCANCODE_R) {
+                    return true;
+                }
             }
         }
 
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
+        render_stars(renderer);
 
-        Text game_over_text = { "GAME OVER", 0, 0, 1, &ken_pixel_font};
+        // Render "GAME OVER"
+        Text game_over_text = {"GAME OVER", 0, 0, 1.3, &ken_pixel_font};
         Uint32 game_over_text_width = Text_calculate_width(&game_over_text);
         Uint32 game_over_text_height = Text_calculate_height(&game_over_text);
         game_over_text.x = (SCREEN_WIDTH - game_over_text_width) / 2.;
         game_over_text.y = (SCREEN_HEIGHT - game_over_text_height) / 3.;
         Text_write_to_screen(renderer, &game_over_text);
 
+        // Render hint
         Text hint_text = {
-            "(Q)uit or (R)estart",
+            "(Q)uit  or  (R)estart",
             0,
             game_over_text.y + game_over_text_height + 10,
-            1./3,
+            1./2,
             &ken_pixel_font
         };
         hint_text.x = (SCREEN_WIDTH - Text_calculate_width(&hint_text)) / 2.;
         Text_write_to_screen(renderer, &hint_text);
 
         render_score(renderer, score);
-
         SDL_RenderPresent(renderer);
+        cap_fps(MAX_FPS);
     }
 }
 
+/*** Game ***/
+
+typedef struct {
+    Spaceship *spaceships;
+    BulletsManager *bullets_manager;
+    Explosion *explosions;
+    Uint32 score;
+} Game;
+
+void Game_new(Game *game, SDL_Renderer *renderer) {
+    game->spaceships = Spaceship_new_player_spaceship(renderer);
+    game->bullets_manager = BulletsManager_new();
+    game->explosions = NULL;
+    game->score = 0;
+}
+
+void Game_destroy(Game *game) {
+
+}
+
+/*** Main ***/
+
 int main(int argc, char *argv[]) {
-    initialize_sdl();
-    SDL_Window *window = SDL_CreateWindow(
-        "Spaceship",
-        SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
-        SCREEN_WIDTH, SCREEN_HEIGHT, 0
-    );
-    if (!window) { sdl_fail(); }
-    // TODO: move window and renderer initialization to `initialize_sdl`
-    // (for some reason it doesn't work properly when I move it...)
-    SDL_Renderer *renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
-    if (!renderer) { sdl_fail(); }
-
-    if (Mix_OpenAudio(44100, MIX_DEFAULT_FORMAT, 2, 4096)) {
-        sdl_fail();
-    }
-
+    SDL_Window *window;
+    SDL_Renderer *renderer;
+    sdl_init(&window, &renderer);
     TexturesCache_initialize();
+    SoundChunksCache_initialize();
 
-    // initialize game
-    Spaceship *player = Spaceship_new_player_spaceship(renderer);
-    BulletsManager *bullets_manager = BulletsManager_new();
-    Uint32 score = 0;
-    Explosion *explosions = NULL;
-
-    Spaceship *curr = player;
+    Game game; Game_new(&game, renderer);
+    Spaceship *curr = game.spaceships;
     Uint32 spawn_delay = SPAWN_DELAY;
 
     while(1) {
-        if (Spaceship_is_dead(player)) {
-            Mix_Chunk *game_over_sound = Mix_LoadWAV("assets/sounds/powerups_7.wav");
-            if (!game_over_sound) { sdl_fail(); }
-            Mix_PlayChannel(-1, game_over_sound, 0);
-            if (show_game_over_screen(renderer, score)) {
-                player = Spaceship_new_player_spaceship(renderer);
-                bullets_manager = BulletsManager_new();
-                explosions = NULL;
-                score = 0;
+        if (Spaceship_is_dead(game.spaceships)) {
+            SoundChunkCache_play(SOUND_CHUNK_LOST);
+            Game_destroy(&game);
+            if (show_game_over_screen(renderer, game.score)) {
+                Game_new(&game, renderer);
             } else {
                 break;
             }
         }
 
-        if (!handle_input(player)) { break; }
+        if (!handle_input(game.spaceships)) {
+            break;
+        }
 
         SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
         SDL_RenderClear(renderer);
         render_stars(renderer);
 
-        move_spaceships(player, &explosions, renderer);
-        BulletsManager_move_bullets(bullets_manager);
-        Spaceship_fire(player, bullets_manager, renderer, false);
-        apply_bullet_hits(renderer, player, bullets_manager, &explosions);
-        score += Spaceship_clean_up(player, &explosions, renderer);
-        render_score(renderer, score);
-        make_enemies_shoot(player, bullets_manager, renderer);
+        move_spaceships(game.spaceships, &game.explosions, renderer);
+        BulletsManager_move_bullets(game.bullets_manager);
+        Spaceship_fire(game.spaceships, game.bullets_manager, renderer, false);
+        apply_bullet_hits(renderer, game.spaceships, game.bullets_manager, &game.explosions);
+        game.score += Spaceship_clean_up(game.spaceships, &game.explosions, renderer);
+        render_score(renderer, game.score);
+        make_enemies_shoot(game.spaceships, game.bullets_manager, renderer);
         if (spawn_delay == 0) {
-            spawn_enemies(player, renderer);
+            spawn_enemies(game.spaceships, renderer);
             spawn_delay = SPAWN_DELAY;
         }
         spawn_delay--;
 
-        Spaceship_render(player, renderer);
-        curr = player;
+        Spaceship_render(game.spaceships, renderer);
+        curr = game.spaceships;
         while(curr != NULL) {
             Spaceship_render(curr, renderer);
             curr = curr->next;
         }
-        explosions = Explosion_step(explosions, renderer);
-        BulletsManager_render_bullets(bullets_manager, renderer);
+        game.explosions = Explosion_step(game.explosions, renderer);
+        BulletsManager_render_bullets(game.bullets_manager, renderer);
 
         render_fps(renderer);
 
@@ -1051,11 +1217,10 @@ int main(int argc, char *argv[]) {
         cap_fps(MAX_FPS);
     }
 
+    Spaceship_destroy(game.spaceships);
+    BulletsManager_destroy(game.bullets_manager);
+
     TexturesCache_destroy();
-    Spaceship_destroy(player);
-    BulletsManager_destroy(bullets_manager);
-    SDL_DestroyRenderer(renderer);
-    SDL_DestroyWindow(window);
-    IMG_Quit();
-    SDL_Quit();
+    SoundChunksCache_destroy();
+    sdl_destroy(window, renderer);
 }
