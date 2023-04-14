@@ -1,17 +1,23 @@
 package main
 
 import (
-    _ "fmt"
+	_ "fmt"
 	"github.com/veandco/go-sdl2/sdl"
+	"github.com/veandco/go-sdl2/ttf"
 	"golang.org/x/exp/constraints"
 )
 
-const ScreenWidth = 800
-const ScreenHeight = 600
+const WindowDefaultWidth = 800
+const WindowDefaultHeight = 600
+const WindowMinWidth = 400
+const WindowMinHeight = 200
 
 const AppMaxTablesCount = 36
 
 type App struct {
+	Window   *sdl.Window
+	Renderer *sdl.Renderer
+
 	Components  []Component
 	Tables      [AppMaxTablesCount]Table
 	TablesCount int
@@ -65,19 +71,20 @@ type ButtonAddTable struct {
 	DefaultColor     sdl.Color
 	HoverColor       sdl.Color
 	ActiveColor      sdl.Color
+	Active           bool
 	Hover            bool
 	TimeoutMs        uint32
 	CurrentTimeoutMs uint32
 }
 
 func (button *ButtonAddTable) Render(renderer *sdl.Renderer, app *App) {
-    if button.CurrentTimeoutMs < app.MsChange() {
-        button.CurrentTimeoutMs = 0
-    } else {
-        button.CurrentTimeoutMs = button.CurrentTimeoutMs - app.MsChange()
-    }
+	if button.CurrentTimeoutMs < app.MsChange() {
+		button.CurrentTimeoutMs = 0
+	} else {
+		button.CurrentTimeoutMs = button.CurrentTimeoutMs - app.MsChange()
+	}
 
-	if button.CurrentTimeoutMs > 0 {
+	if button.Active || button.CurrentTimeoutMs > 0 {
 		renderer.SetDrawColor(button.ActiveColor.R, button.ActiveColor.G, button.ActiveColor.B, 255)
 	} else if button.Hover {
 		renderer.SetDrawColor(button.HoverColor.R, button.HoverColor.G, button.HoverColor.B, 255)
@@ -106,17 +113,25 @@ func placeNewTable(newTable *Table, tables []Table) {
 }
 
 func (button *ButtonAddTable) OnMouseButtonEvent(event *sdl.MouseButtonEvent, app *App) bool {
-	if event.Button == sdl.BUTTON_LEFT && event.Type == sdl.MOUSEBUTTONDOWN {
-		if pointInRect(event.X, event.Y, button.Rect) {
-			button.CurrentTimeoutMs = button.TimeoutMs
-			if app.TablesCount == AppMaxTablesCount {
-				panic("Reached table count limit!")
+	if event.Button == sdl.BUTTON_LEFT {
+		if event.Type == sdl.MOUSEBUTTONDOWN {
+			if pointInRect(event.X, event.Y, button.Rect) {
+				button.Active = true
+				return true
 			}
-			newTable := Table{Rect: sdl.Rect{W: 150, H: 100}}
-			placeNewTable(&newTable, app.Tables[:app.TablesCount])
-			app.Tables[app.TablesCount] = newTable
-			app.TablesCount++
-			return true
+		} else if event.Type == sdl.MOUSEBUTTONUP {
+			button.Active = false
+			if button.Hover {
+				button.CurrentTimeoutMs = button.TimeoutMs
+				if app.TablesCount == AppMaxTablesCount {
+					panic("Reached table count limit!")
+				}
+				newTable := Table{Rect: sdl.Rect{W: 150, H: 100}}
+				placeNewTable(&newTable, app.Tables[:app.TablesCount])
+				app.Tables[app.TablesCount] = newTable
+				app.TablesCount++
+				return true
+			}
 		}
 	}
 	return false
@@ -125,7 +140,6 @@ func (button *ButtonAddTable) OnMouseButtonEvent(event *sdl.MouseButtonEvent, ap
 func (button *ButtonAddTable) OnMouseMotionEvent(event *sdl.MouseMotionEvent, app *App) {
 	button.Hover = pointInRect(event.X, event.Y, button.Rect)
 }
-
 
 const TableGrabHandleSize = 10
 
@@ -196,24 +210,44 @@ func (table *Table) OnMouseMotionEvent(event *sdl.MouseMotionEvent, app *App) {
 	table.GrabHandleVisible = table.Hover
 }
 
+func GetWindowScale(window *sdl.Window, renderer *sdl.Renderer) (xs, ys float32) {
+	xs, ys = 1, 1
+	windowWidth, windowHeight := window.GetSize()
+	rendererWidth, rendererHeight, _ := renderer.GetOutputSize()
+	if rendererWidth != windowWidth {
+		xs = float32(rendererWidth) / float32(windowWidth)
+		ys = float32(rendererHeight) / float32(windowHeight)
+	}
+	return
+}
+
 func sdlInit() (window *sdl.Window, renderer *sdl.Renderer) {
 	var err error
 	if err := sdl.Init(sdl.INIT_VIDEO | sdl.INIT_EVENTS); err != nil {
 		panic(err)
 	}
 	window, err = sdl.CreateWindow(
-		"test",
+		"Butter",
 		sdl.WINDOWPOS_UNDEFINED, sdl.WINDOWPOS_UNDEFINED,
-		ScreenWidth, ScreenHeight,
-		sdl.WINDOW_SHOWN,
+		WindowDefaultWidth, WindowDefaultHeight,
+		sdl.WINDOW_SHOWN|sdl.WINDOW_ALLOW_HIGHDPI|sdl.WINDOW_RESIZABLE,
 	)
 	if err != nil {
 		panic(err)
 	}
+	window.SetMinimumSize(WindowMinWidth, WindowMinHeight)
+
 	renderer, err = sdl.CreateRenderer(window, -1, sdl.RENDERER_ACCELERATED)
 	if err != nil {
 		panic(err)
 	}
+
+	xs, ys := GetWindowScale(window, renderer)
+	if xs != 1 {
+		renderer.SetScale(xs, ys)
+	}
+
+	ttf.Init()
 	return
 }
 
@@ -249,13 +283,28 @@ func handleInput(app *App) bool {
 	return true
 }
 
+func RendererCopy(window *sdl.Window, renderer *sdl.Renderer, texture *sdl.Texture, src *sdl.Rect, dst *sdl.Rect) {
+	xs, ys := GetWindowScale(window, renderer)
+	dst.W = int32(float32(dst.W) / xs)
+	dst.H = int32(float32(dst.H) / ys)
+	renderer.Copy(texture, src, dst)
+}
+
+func TtfOpenFont(window *sdl.Window, renderer *sdl.Renderer, fontFileName string, size uint32) (*ttf.Font, error) {
+	xs, _ := GetWindowScale(window, renderer)
+	return ttf.OpenFont(fontFileName, int(float32(size)*xs))
+}
+
 func main() {
 	window, renderer := sdlInit()
 	defer sdl.Quit()
 	defer window.Destroy()
 	defer renderer.Destroy()
+	defer ttf.Quit()
 
 	app := App{
+		Window:   window,
+		Renderer: renderer,
 		Components: []Component{
 			&ButtonAddTable{
 				Rect:         sdl.Rect{X: 10, Y: 10, W: 50, H: 25},
@@ -266,6 +315,11 @@ func main() {
 			},
 		},
 	}
+	font, _ := TtfOpenFont(window, renderer, "assets/Lato/Lato-Regular.ttf", 16)
+	surface, _ := font.RenderUTF8Blended("TTF Test :)", sdl.Color{R: 0, G: 0, B: 0, A: 255})
+    defer surface.Free()
+	textTexture, _ := renderer.CreateTextureFromSurface(surface)
+	defer textTexture.Destroy()
 
 	for {
 		app.UpdateTicks()
@@ -277,6 +331,8 @@ func main() {
 		renderer.SetDrawColor(255, 255, 255, 255)
 		renderer.Clear()
 
+		RendererCopy(window, renderer, textTexture, nil, &sdl.Rect{X: 100, Y: 15, W: surface.W, H: surface.H})
+
 		for _, button := range app.Components {
 			button.Render(renderer, &app)
 		}
@@ -285,6 +341,6 @@ func main() {
 		}
 
 		renderer.Present()
-		sdl.Delay(16)
+		// sdl.Delay(16) // cap at 60fps
 	}
 }
