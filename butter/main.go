@@ -75,6 +75,14 @@ type ButtonAddTable struct {
 	Hover            bool
 	TimeoutMs        uint32
 	CurrentTimeoutMs uint32
+	Font             *ttf.Font
+    FontSurface *sdl.Surface
+}
+
+func (button *ButtonAddTable) Destroy() {
+    if button.FontSurface != nil {
+        button.FontSurface.Free()
+    }
 }
 
 func (button *ButtonAddTable) Render(renderer *sdl.Renderer, app *App) {
@@ -84,17 +92,53 @@ func (button *ButtonAddTable) Render(renderer *sdl.Renderer, app *App) {
 		button.CurrentTimeoutMs = button.CurrentTimeoutMs - app.MsChange()
 	}
 
+	fillColor := button.DefaultColor
 	if button.Active || button.CurrentTimeoutMs > 0 {
-		renderer.SetDrawColor(button.ActiveColor.R, button.ActiveColor.G, button.ActiveColor.B, 255)
+		fillColor = button.ActiveColor
 	} else if button.Hover {
-		renderer.SetDrawColor(button.HoverColor.R, button.HoverColor.G, button.HoverColor.B, 255)
-	} else {
-		renderer.SetDrawColor(button.DefaultColor.R, button.DefaultColor.G, button.DefaultColor.B, 255)
+		fillColor = button.HoverColor
 	}
-
+	renderer.SetDrawColor(fillColor.R, fillColor.G, fillColor.B, fillColor.A)
 	renderer.FillRect(&button.Rect)
-	renderer.SetDrawColor(0, 0, 0, 255)
-	renderer.DrawRect(&button.Rect)
+
+	// draw inside of the button
+	outlineColor := sdl.Color{R: 0, G: 0, B: 0, A: 255}
+	if button.Active || button.CurrentTimeoutMs > 0 {
+		outlineColor = sdl.Color{R: 255, G: 255, B: 255, A: 255}
+	}
+	renderer.SetDrawColor(outlineColor.R, outlineColor.G, outlineColor.B, outlineColor.A)
+	xMargin := float32(button.Rect.W) * 0.2
+	yMargin := float32(button.Rect.H) * 0.2
+	smallRect := sdl.Rect{
+		X: button.Rect.X + int32(xMargin),
+		Y: button.Rect.Y + int32(yMargin),
+		W: button.Rect.W - 2*int32(xMargin),
+		H: button.Rect.H - 2*int32(yMargin),
+	}
+	renderer.DrawRect(&smallRect)
+	// vertical line
+	renderer.DrawLine(smallRect.X+smallRect.W/2, smallRect.Y, smallRect.X+smallRect.W/2, smallRect.Y+smallRect.H-1)
+	// horizontal line
+	renderer.DrawLine(smallRect.X, smallRect.Y+smallRect.H/2, smallRect.X+smallRect.W-1, smallRect.Y+smallRect.H/2)
+
+	if button.Font == nil {
+		button.Font, _ = TtfOpenFont(app.Window, app.Renderer, "assets/Lato/Lato-Regular.ttf", 10)
+		button.FontSurface, _ = button.Font.RenderUTF8Blended("Add Table", sdl.Color{R: 0, G: 0, B: 0, A: 255})
+	}
+    textTexture, _ := renderer.CreateTextureFromSurface(button.FontSurface)
+	xs, _ := GetWindowScale(app.Window, app.Renderer)
+	RendererCopy(
+		app.Window,
+		app.Renderer,
+		textTexture,
+		nil,
+		&sdl.Rect{
+			X: button.Rect.X - ((int32(float32(button.FontSurface.W)/xs) - button.Rect.W) / 2),
+			Y: button.Rect.Y + button.Rect.H,
+			W: button.FontSurface.W,
+			H: button.FontSurface.H,
+		},
+	)
 }
 
 func placeNewTable(newTable *Table, tables []Table) {
@@ -302,24 +346,19 @@ func main() {
 	defer renderer.Destroy()
 	defer ttf.Quit()
 
-	app := App{
-		Window:   window,
-		Renderer: renderer,
-		Components: []Component{
-			&ButtonAddTable{
-				Rect:         sdl.Rect{X: 10, Y: 10, W: 50, H: 25},
-				DefaultColor: sdl.Color{R: 255, G: 255, B: 255, A: 255},
-				HoverColor:   sdl.Color{R: 128, G: 128, B: 128, A: 255},
-				ActiveColor:  sdl.Color{R: 64, G: 64, B: 64, A: 255},
-				TimeoutMs:    200,
-			},
-		},
+	buttonAddTable := ButtonAddTable{
+		Rect:         sdl.Rect{X: 10, Y: 10, W: 35, H: 25},
+		DefaultColor: sdl.Color{R: 255, G: 255, B: 255, A: 255},
+		HoverColor:   sdl.Color{R: 128, G: 128, B: 128, A: 255},
+		ActiveColor:  sdl.Color{R: 64, G: 64, B: 64, A: 255},
+		TimeoutMs:    200,
 	}
-	font, _ := TtfOpenFont(window, renderer, "assets/Lato/Lato-Regular.ttf", 16)
-	surface, _ := font.RenderUTF8Blended("TTF Test :)", sdl.Color{R: 0, G: 0, B: 0, A: 255})
-    defer surface.Free()
-	textTexture, _ := renderer.CreateTextureFromSurface(surface)
-	defer textTexture.Destroy()
+
+	app := App{
+		Window:     window,
+		Renderer:   renderer,
+		Components: []Component{&buttonAddTable},
+	}
 
 	for {
 		app.UpdateTicks()
@@ -331,8 +370,6 @@ func main() {
 		renderer.SetDrawColor(255, 255, 255, 255)
 		renderer.Clear()
 
-		RendererCopy(window, renderer, textTexture, nil, &sdl.Rect{X: 100, Y: 15, W: surface.W, H: surface.H})
-
 		for _, button := range app.Components {
 			button.Render(renderer, &app)
 		}
@@ -341,6 +378,8 @@ func main() {
 		}
 
 		renderer.Present()
-		// sdl.Delay(16) // cap at 60fps
+		sdl.Delay(16) // cap at 60fps
 	}
+
+    buttonAddTable.Destroy()
 }
