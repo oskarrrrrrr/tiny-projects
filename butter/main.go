@@ -1,7 +1,6 @@
 package main
 
 import (
-	_ "fmt"
 	"github.com/veandco/go-sdl2/sdl"
 	"github.com/veandco/go-sdl2/ttf"
 	"golang.org/x/exp/constraints"
@@ -12,17 +11,20 @@ const WindowDefaultHeight = 600
 const WindowMinWidth = 400
 const WindowMinHeight = 200
 
+const TopBarHeight = 55
+const ViewPortSideMargin = 10
+const ViewPortVerticalMargin = 5
+
 const AppMaxTablesCount = 36
 
 type App struct {
 	Window   *sdl.Window
 	Renderer *sdl.Renderer
 
-	Components  []Component
-	Tables      [AppMaxTablesCount]Table
-	TablesCount int
-	PrevTicks   uint32
-	Ticks       uint32
+	ViewPort   ViewPort
+	Components []Component
+	PrevTicks  uint32
+	Ticks      uint32
 }
 
 func (app *App) UpdateTicks() {
@@ -76,13 +78,13 @@ type ButtonAddTable struct {
 	TimeoutMs        uint32
 	CurrentTimeoutMs uint32
 	Font             *ttf.Font
-    FontSurface *sdl.Surface
+	FontSurface      *sdl.Surface
 }
 
 func (button *ButtonAddTable) Destroy() {
-    if button.FontSurface != nil {
-        button.FontSurface.Free()
-    }
+	if button.FontSurface != nil {
+		button.FontSurface.Free()
+	}
 }
 
 func (button *ButtonAddTable) Render(renderer *sdl.Renderer, app *App) {
@@ -125,7 +127,7 @@ func (button *ButtonAddTable) Render(renderer *sdl.Renderer, app *App) {
 		button.Font, _ = TtfOpenFont(app.Window, app.Renderer, "assets/Lato/Lato-Regular.ttf", 10)
 		button.FontSurface, _ = button.Font.RenderUTF8Blended("Add Table", sdl.Color{R: 0, G: 0, B: 0, A: 255})
 	}
-    textTexture, _ := renderer.CreateTextureFromSurface(button.FontSurface)
+	textTexture, _ := renderer.CreateTextureFromSurface(button.FontSurface)
 	xs, _ := GetWindowScale(app.Window, app.Renderer)
 	RendererCopy(
 		app.Window,
@@ -142,8 +144,8 @@ func (button *ButtonAddTable) Render(renderer *sdl.Renderer, app *App) {
 }
 
 func placeNewTable(newTable *Table, tables []Table) {
-	newTable.Rect.X = 10
-	newTable.Rect.Y = 50
+	newTable.Rect.X = 0
+	newTable.Rect.Y = 0
 	hasIntersections := true
 	for hasIntersections {
 		hasIntersections = false
@@ -167,13 +169,13 @@ func (button *ButtonAddTable) OnMouseButtonEvent(event *sdl.MouseButtonEvent, ap
 			button.Active = false
 			if button.Hover {
 				button.CurrentTimeoutMs = button.TimeoutMs
-				if app.TablesCount == AppMaxTablesCount {
+				if app.ViewPort.TablesCount == AppMaxTablesCount {
 					panic("Reached table count limit!")
 				}
-				newTable := Table{Rect: sdl.Rect{W: 150, H: 100}}
-				placeNewTable(&newTable, app.Tables[:app.TablesCount])
-				app.Tables[app.TablesCount] = newTable
-				app.TablesCount++
+				newTable := Table{Rect: sdl.Rect{W: 150, H: 100}, ViewPort: &app.ViewPort}
+				placeNewTable(&newTable, app.ViewPort.Tables[:app.ViewPort.TablesCount])
+				app.ViewPort.Tables[app.ViewPort.TablesCount] = newTable
+				app.ViewPort.TablesCount++
 				return true
 			}
 		}
@@ -188,6 +190,7 @@ func (button *ButtonAddTable) OnMouseMotionEvent(event *sdl.MouseMotionEvent, ap
 const TableGrabHandleSize = 10
 
 type Table struct {
+	ViewPort          *ViewPort
 	Rect              sdl.Rect
 	Hover             bool
 	Grabbed           bool
@@ -195,13 +198,24 @@ type Table struct {
 	GrabHandle        sdl.Rect
 }
 
-func (table *Table) Render(renderer *sdl.Renderer, app *App) {
+func (table *Table) Render(viewPortRect sdl.Rect, renderer *sdl.Renderer) {
+	rect := sdl.Rect{
+		X: viewPortRect.X + table.Rect.X,
+		Y: viewPortRect.Y + table.Rect.Y,
+		W: table.Rect.W,
+		H: table.Rect.H,
+	}
+	rect, rectNonEmpty := rect.Intersect(&viewPortRect)
+	if !rectNonEmpty {
+		return
+	}
 	renderer.SetDrawColor(0, 0, 0, 255)
-	renderer.DrawRect(&table.Rect)
+	renderer.DrawRect(&rect)
+
 	if table.GrabHandleVisible {
 		table.GrabHandle = sdl.Rect{
-			X: table.Rect.X - (TableGrabHandleSize / 2),
-			Y: table.Rect.Y - (TableGrabHandleSize / 2),
+			X: table.ViewPort.Rect.X + table.Rect.X - (TableGrabHandleSize / 2),
+			Y: table.ViewPort.Rect.Y + table.Rect.Y - (TableGrabHandleSize / 2),
 			W: TableGrabHandleSize,
 			H: TableGrabHandleSize,
 		}
@@ -211,7 +225,13 @@ func (table *Table) Render(renderer *sdl.Renderer, app *App) {
 }
 
 func (table *Table) pointInside(x, y int32) bool {
-	return pointInRect(x, y, table.Rect) || (table.GrabHandleVisible && pointInRect(x, y, table.GrabHandle))
+	rect := sdl.Rect{
+		X: table.ViewPort.Rect.X + table.Rect.X,
+		Y: table.ViewPort.Rect.Y + table.Rect.Y,
+		H: table.Rect.H,
+		W: table.Rect.W,
+	}
+	return pointInRect(x, y, rect) || (table.GrabHandleVisible && pointInRect(x, y, table.GrabHandle))
 }
 
 func (table *Table) OnMouseButtonEvent(event *sdl.MouseButtonEvent, app *App) bool {
@@ -228,6 +248,9 @@ func (table *Table) OnMouseButtonEvent(event *sdl.MouseButtonEvent, app *App) bo
 }
 
 func (table *Table) canMove(tables []Table, count int, dx, dy int32) bool {
+	if table.Rect.X+dx < 0 || table.Rect.Y+dy < 0 {
+		return false
+	}
 	for i := 0; i < count; i++ {
 		curr := tables[i]
 		if table.Rect.X == curr.Rect.X && table.Rect.Y == curr.Rect.Y {
@@ -244,7 +267,7 @@ func (table *Table) canMove(tables []Table, count int, dx, dy int32) bool {
 }
 
 func (table *Table) OnMouseMotionEvent(event *sdl.MouseMotionEvent, app *App) {
-	if table.Grabbed && table.canMove(app.Tables[:], app.TablesCount, event.XRel, event.YRel) {
+	if table.Grabbed && table.canMove(app.ViewPort.Tables[:], app.ViewPort.TablesCount, event.XRel, event.YRel) {
 		table.Rect.X += event.XRel
 		table.Rect.Y += event.YRel
 		table.GrabHandle.X += event.XRel
@@ -252,6 +275,23 @@ func (table *Table) OnMouseMotionEvent(event *sdl.MouseMotionEvent, app *App) {
 	}
 	table.Hover = table.pointInside(event.X, event.Y)
 	table.GrabHandleVisible = table.Hover
+}
+
+type ViewPort struct {
+	Rect        sdl.Rect
+	Tables      [AppMaxTablesCount]Table
+	TablesCount int
+}
+
+func (viewPort *ViewPort) Render(renderer *sdl.Renderer, app *App) {
+	renderer.SetDrawColor(0, 0, 0, 255)
+	renderer.DrawRect(&viewPort.Rect)
+}
+
+func (viewPort *ViewPort) OnWindowResize(event *sdl.WindowEvent, app *App) {
+	w, h := app.Window.GetSize()
+	viewPort.Rect.W = w - 2*ViewPortSideMargin
+	viewPort.Rect.H = h - 2*ViewPortVerticalMargin - TopBarHeight
 }
 
 func GetWindowScale(window *sdl.Window, renderer *sdl.Renderer) (xs, ys float32) {
@@ -295,7 +335,7 @@ func sdlInit() (window *sdl.Window, renderer *sdl.Renderer) {
 	return
 }
 
-func handleInput(app *App) bool {
+func handleEvents(app *App) bool {
 	for _event := sdl.PollEvent(); _event != nil; _event = sdl.PollEvent() {
 		switch event := _event.(type) {
 		case *sdl.QuitEvent:
@@ -312,15 +352,20 @@ func handleInput(app *App) bool {
 			for i := range app.Components {
 				click_registered = click_registered || app.Components[i].OnMouseButtonEvent(event, app)
 			}
-			for i := range app.Tables {
-				click_registered = click_registered || app.Tables[i].OnMouseButtonEvent(event, app)
+			for i := range app.ViewPort.Tables {
+				click_registered = click_registered || app.ViewPort.Tables[i].OnMouseButtonEvent(event, app)
 			}
 		case *sdl.MouseMotionEvent:
 			for i := range app.Components {
 				app.Components[i].OnMouseMotionEvent(event, app)
 			}
-			for i := range app.Tables {
-				app.Tables[i].OnMouseMotionEvent(event, app)
+			for i := 0; i < app.ViewPort.TablesCount; i++ {
+				app.ViewPort.Tables[i].OnMouseMotionEvent(event, app)
+			}
+		case *sdl.WindowEvent:
+			switch event.Event {
+			case sdl.WINDOWEVENT_SIZE_CHANGED, sdl.WINDOWEVENT_SHOWN:
+				app.ViewPort.OnWindowResize(event, app)
 			}
 		}
 	}
@@ -357,29 +402,32 @@ func main() {
 	app := App{
 		Window:     window,
 		Renderer:   renderer,
+		ViewPort:   ViewPort{Rect: sdl.Rect{X: 10, Y: 55, W: 200, H: 200}},
 		Components: []Component{&buttonAddTable},
 	}
 
 	for {
 		app.UpdateTicks()
 
-		if continue_ := handleInput(&app); !continue_ {
+		if continue_ := handleEvents(&app); !continue_ {
 			break
 		}
 
 		renderer.SetDrawColor(255, 255, 255, 255)
 		renderer.Clear()
 
+		app.ViewPort.Render(renderer, &app)
+
 		for _, button := range app.Components {
 			button.Render(renderer, &app)
 		}
-		for i := 0; i < app.TablesCount; i++ {
-			app.Tables[i].Render(renderer, &app)
+		for i := 0; i < app.ViewPort.TablesCount; i++ {
+			app.ViewPort.Tables[i].Render(app.ViewPort.Rect, renderer)
 		}
 
 		renderer.Present()
 		sdl.Delay(16) // cap at 60fps
 	}
 
-    buttonAddTable.Destroy()
+	buttonAddTable.Destroy()
 }
