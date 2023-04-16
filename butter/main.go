@@ -68,6 +68,13 @@ func Max[T constraints.Ordered](x, y T) T {
 	return y
 }
 
+func Abs[T constraints.Integer](x T) T {
+	if x > 0 {
+		return x
+	}
+	return -x
+}
+
 type ButtonAddTable struct {
 	Rect             sdl.Rect
 	DefaultColor     sdl.Color
@@ -198,14 +205,14 @@ type Table struct {
 	GrabHandle        sdl.Rect
 }
 
-func (table *Table) Render(viewPortRect sdl.Rect, renderer *sdl.Renderer) {
+func (table *Table) Render(viewPort *ViewPort, renderer *sdl.Renderer) {
 	rect := sdl.Rect{
-		X: viewPortRect.X + table.Rect.X,
-		Y: viewPortRect.Y + table.Rect.Y,
+		X: viewPort.Rect.X + table.Rect.X + viewPort.HorizontalScroll,
+		Y: viewPort.Rect.Y + table.Rect.Y + viewPort.VerticalScroll,
 		W: table.Rect.W,
 		H: table.Rect.H,
 	}
-	rect, rectNonEmpty := rect.Intersect(&viewPortRect)
+	rect, rectNonEmpty := rect.Intersect(&viewPort.Rect)
 	if !rectNonEmpty {
 		return
 	}
@@ -214,20 +221,23 @@ func (table *Table) Render(viewPortRect sdl.Rect, renderer *sdl.Renderer) {
 
 	if table.GrabHandleVisible {
 		table.GrabHandle = sdl.Rect{
-			X: table.ViewPort.Rect.X + table.Rect.X - (TableGrabHandleSize / 2),
-			Y: table.ViewPort.Rect.Y + table.Rect.Y - (TableGrabHandleSize / 2),
+			X: table.ViewPort.Rect.X + table.Rect.X - (TableGrabHandleSize / 2) + viewPort.HorizontalScroll,
+			Y: table.ViewPort.Rect.Y + table.Rect.Y - (TableGrabHandleSize / 2) + viewPort.VerticalScroll,
 			W: TableGrabHandleSize,
 			H: TableGrabHandleSize,
 		}
-		renderer.SetDrawColor(0, 0, 128, 255)
-		renderer.FillRect(&table.GrabHandle)
+		rect, rectNonEmpty := table.GrabHandle.Intersect(&table.ViewPort.Rect)
+		if rectNonEmpty {
+			renderer.SetDrawColor(0, 0, 128, 255)
+			renderer.FillRect(&rect)
+		}
 	}
 }
 
 func (table *Table) pointInside(x, y int32) bool {
 	rect := sdl.Rect{
-		X: table.ViewPort.Rect.X + table.Rect.X,
-		Y: table.ViewPort.Rect.Y + table.Rect.Y,
+		X: table.ViewPort.Rect.X + table.Rect.X + table.ViewPort.HorizontalScroll,
+		Y: table.ViewPort.Rect.Y + table.Rect.Y + table.ViewPort.VerticalScroll,
 		H: table.Rect.H,
 		W: table.Rect.W,
 	}
@@ -277,21 +287,78 @@ func (table *Table) OnMouseMotionEvent(event *sdl.MouseMotionEvent, app *App) {
 	table.GrabHandleVisible = table.Hover
 }
 
+const ViewPortRightScrollMargin = 100
+
 type ViewPort struct {
-	Rect        sdl.Rect
-	Tables      [AppMaxTablesCount]Table
-	TablesCount int
+	Rect                    sdl.Rect
+	Tables                  [AppMaxTablesCount]Table
+	TablesCount             int
+	ShowVerticalScrollBar   int
+	VerticalScroll          int32
+	ShowHorizontalScrollBar int
+	HorizontalScroll        int32
+}
+
+func (viewPort *ViewPort) MaxUsedX() int32 {
+	max_x := int32(0)
+	for i := 0; i < viewPort.TablesCount; i++ {
+		t := viewPort.Tables[i].Rect
+		max_x = Max(t.X+t.W, max_x)
+	}
+	return max_x
 }
 
 func (viewPort *ViewPort) Render(renderer *sdl.Renderer, app *App) {
 	renderer.SetDrawColor(0, 0, 0, 255)
 	renderer.DrawRect(&viewPort.Rect)
+
+	viewPort.ShowVerticalScrollBar = Max(viewPort.ShowVerticalScrollBar-int(app.MsChange()), 0)
+	viewPort.ShowHorizontalScrollBar = Max(viewPort.ShowHorizontalScrollBar-int(app.MsChange()), 0)
+	ScrollBarDim := int32(10)
+
+	renderer.SetDrawColor(96, 96, 96, 172)
+	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+
+	if viewPort.ShowHorizontalScrollBar > 0 {
+		max_x := Max(viewPort.MaxUsedX()+ViewPortRightScrollMargin, viewPort.Rect.W)
+		renderer.FillRect(&sdl.Rect{
+			X: viewPort.Rect.X + int32(float32(viewPort.Rect.W)*float32(-viewPort.HorizontalScroll)/float32(max_x)),
+			Y: viewPort.Rect.Y + viewPort.Rect.H - ScrollBarDim,
+			W: int32(float32(viewPort.Rect.W) * float32(viewPort.Rect.W) / float32(max_x)),
+			H: ScrollBarDim,
+		})
+	}
+
+	if viewPort.ShowVerticalScrollBar > 0 {
+		renderer.FillRect(&sdl.Rect{
+			X: viewPort.Rect.X + viewPort.Rect.W - ScrollBarDim,
+			Y: viewPort.Rect.Y,
+			W: ScrollBarDim,
+			H: viewPort.Rect.H,
+		})
+	}
 }
 
 func (viewPort *ViewPort) OnWindowResize(event *sdl.WindowEvent, app *App) {
 	w, h := app.Window.GetSize()
 	viewPort.Rect.W = w - 2*ViewPortSideMargin
 	viewPort.Rect.H = h - 2*ViewPortVerticalMargin - TopBarHeight
+}
+
+func (viewPort *ViewPort) OnMouseWheel(event *sdl.MouseWheelEvent) {
+	if Abs(event.X) > Abs(event.Y) {
+		viewPort.ShowHorizontalScrollBar = 1000
+		viewPort.ShowVerticalScrollBar = 0
+		newHorizontalScroll := Min(viewPort.HorizontalScroll+10*event.X, 0)
+		if viewPort.Rect.W-newHorizontalScroll > viewPort.MaxUsedX()+ViewPortRightScrollMargin {
+		} else {
+			viewPort.HorizontalScroll = newHorizontalScroll
+		}
+	} else if Abs(event.X) < Abs(event.Y) {
+		viewPort.ShowHorizontalScrollBar = 0
+		viewPort.ShowVerticalScrollBar = 1000
+		viewPort.VerticalScroll = Min(viewPort.VerticalScroll+10*event.Y, 0)
+	}
 }
 
 func GetWindowScale(window *sdl.Window, renderer *sdl.Renderer) (xs, ys float32) {
@@ -362,6 +429,8 @@ func handleEvents(app *App) bool {
 			for i := 0; i < app.ViewPort.TablesCount; i++ {
 				app.ViewPort.Tables[i].OnMouseMotionEvent(event, app)
 			}
+		case *sdl.MouseWheelEvent:
+			app.ViewPort.OnMouseWheel(event)
 		case *sdl.WindowEvent:
 			switch event.Event {
 			case sdl.WINDOWEVENT_SIZE_CHANGED, sdl.WINDOWEVENT_SHOWN:
@@ -422,7 +491,7 @@ func main() {
 			button.Render(renderer, &app)
 		}
 		for i := 0; i < app.ViewPort.TablesCount; i++ {
-			app.ViewPort.Tables[i].Render(app.ViewPort.Rect, renderer)
+			app.ViewPort.Tables[i].Render(&app.ViewPort, renderer)
 		}
 
 		renderer.Present()
