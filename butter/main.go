@@ -221,8 +221,8 @@ func (table *Table) Render(viewPort *ViewPort, renderer *sdl.Renderer) {
 
 	if table.GrabHandleVisible {
 		table.GrabHandle = sdl.Rect{
-			X: table.ViewPort.Rect.X + table.Rect.X - (TableGrabHandleSize / 2) + viewPort.HorizontalScroll,
-			Y: table.ViewPort.Rect.Y + table.Rect.Y - (TableGrabHandleSize / 2) + viewPort.VerticalScroll,
+			X: table.ViewPort.Rect.X + table.Rect.X + viewPort.HorizontalScroll,
+			Y: table.ViewPort.Rect.Y + table.Rect.Y + viewPort.VerticalScroll,
 			W: TableGrabHandleSize,
 			H: TableGrabHandleSize,
 		}
@@ -241,7 +241,7 @@ func (table *Table) pointInside(x, y int32) bool {
 		H: table.Rect.H,
 		W: table.Rect.W,
 	}
-	return pointInRect(x, y, rect) || (table.GrabHandleVisible && pointInRect(x, y, table.GrabHandle))
+	return pointInRect(x, y, rect)
 }
 
 func (table *Table) OnMouseButtonEvent(event *sdl.MouseButtonEvent, app *App) bool {
