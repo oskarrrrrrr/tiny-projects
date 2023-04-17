@@ -287,25 +287,68 @@ func (table *Table) OnMouseMotionEvent(event *sdl.MouseMotionEvent, app *App) {
 	table.GrabHandleVisible = table.Hover
 }
 
-const ViewPortRightScrollMargin = 100
+const (
+	// Extra space that can be seen after the last element on the right
+	ViewPortRightScrollMargin = 100
+	// Extra space that can be seen after the bottom most element
+	ViewPortBottomScrollMargin = 50
+	// Height of the horizontal scroll bar and width of the vertical scroll bar
+	ViewPortScrollBarDim = 10
+	// Delay after which the scroll bars will be hidden
+	ViewPortScrollBarDisplayMs = 1000
+	ViewPortScrollSpeed        = 10
+)
 
+// ViewPort coordinates begin at (0, 0) in the top left corner and all the visible coordinates are positive.
+// Meaning, it's impossible to scroll left or up from the default view, for example, to see the point (-1, 0).
 type ViewPort struct {
-	Rect                    sdl.Rect
-	Tables                  [AppMaxTablesCount]Table
-	TablesCount             int
-	ShowVerticalScrollBar   int
-	VerticalScroll          int32
+	Rect        sdl.Rect
+	Tables      [AppMaxTablesCount]Table
+	TablesCount int
+	// Time left in ms to show the vertical scroll bar
+	ShowVerticalScrollBar int
+	VerticalScroll        int32
+	// Time left in ms to show the horizontal scroll bar
 	ShowHorizontalScrollBar int
 	HorizontalScroll        int32
 }
 
+// MaxUsedX returns the x coordinate of the rightmost point of the rightmost element on the viewPort
 func (viewPort *ViewPort) MaxUsedX() int32 {
-	max_x := int32(0)
+	maxX := int32(0)
 	for i := 0; i < viewPort.TablesCount; i++ {
 		t := viewPort.Tables[i].Rect
-		max_x = Max(t.X+t.W, max_x)
+		maxX = Max(t.X+t.W, maxX)
 	}
-	return max_x
+	return maxX
+}
+
+func (viewPort *ViewPort) MaxViewableX() int32 {
+	return Max(viewPort.MaxUsedX()+ViewPortRightScrollMargin, viewPort.Rect.W)
+}
+
+// Scroll is a negative number so a maximum scroll is actually the smallest number that is a valid scroll.
+func (viewPort *ViewPort) MaxScrollX() int32 {
+	return viewPort.Rect.W - viewPort.MaxViewableX()
+}
+
+// Scroll is a negative number so a maximum scroll is actually the smallest number that is a valid scroll.
+func (viewPort *ViewPort) MaxScrollY() int32 {
+	return viewPort.Rect.H - viewPort.MaxViewableY()
+}
+
+// MaxUsedY returns the y coordinate of the lowest point of the lowest element on the viewPort
+func (viewPort *ViewPort) MaxUsedY() int32 {
+	maxY := int32(0)
+	for i := 0; i < viewPort.TablesCount; i++ {
+		t := viewPort.Tables[i].Rect
+		maxY = Max(t.Y+t.H, maxY)
+	}
+	return maxY
+}
+
+func (viewPort *ViewPort) MaxViewableY() int32 {
+	return Max(viewPort.MaxUsedY()+ViewPortBottomScrollMargin, viewPort.Rect.H)
 }
 
 func (viewPort *ViewPort) Render(renderer *sdl.Renderer, app *App) {
@@ -314,27 +357,27 @@ func (viewPort *ViewPort) Render(renderer *sdl.Renderer, app *App) {
 
 	viewPort.ShowVerticalScrollBar = Max(viewPort.ShowVerticalScrollBar-int(app.MsChange()), 0)
 	viewPort.ShowHorizontalScrollBar = Max(viewPort.ShowHorizontalScrollBar-int(app.MsChange()), 0)
-	ScrollBarDim := int32(10)
 
 	renderer.SetDrawColor(96, 96, 96, 172)
 	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 
 	if viewPort.ShowHorizontalScrollBar > 0 {
-		max_x := Max(viewPort.MaxUsedX()+ViewPortRightScrollMargin, viewPort.Rect.W)
+		viewRatio := float32(viewPort.Rect.W) / float32(viewPort.MaxViewableX())
 		renderer.FillRect(&sdl.Rect{
-			X: viewPort.Rect.X + int32(float32(viewPort.Rect.W)*float32(-viewPort.HorizontalScroll)/float32(max_x)),
-			Y: viewPort.Rect.Y + viewPort.Rect.H - ScrollBarDim,
-			W: int32(float32(viewPort.Rect.W) * float32(viewPort.Rect.W) / float32(max_x)),
-			H: ScrollBarDim,
+			X: viewPort.Rect.X - int32(float32(viewPort.HorizontalScroll)*viewRatio),
+			Y: viewPort.Rect.Y + viewPort.Rect.H - ViewPortScrollBarDim,
+			W: int32(float32(viewPort.Rect.W) * viewRatio),
+			H: ViewPortScrollBarDim,
 		})
 	}
 
 	if viewPort.ShowVerticalScrollBar > 0 {
+		viewRatio := float32(viewPort.Rect.H) / float32(viewPort.MaxViewableY())
 		renderer.FillRect(&sdl.Rect{
-			X: viewPort.Rect.X + viewPort.Rect.W - ScrollBarDim,
-			Y: viewPort.Rect.Y,
-			W: ScrollBarDim,
-			H: viewPort.Rect.H,
+			X: viewPort.Rect.X + viewPort.Rect.W - ViewPortScrollBarDim,
+			Y: viewPort.Rect.Y - int32(float32(viewPort.VerticalScroll)*viewRatio),
+			W: ViewPortScrollBarDim,
+			H: int32(float32(viewPort.Rect.H) * viewRatio),
 		})
 	}
 }
@@ -346,18 +389,27 @@ func (viewPort *ViewPort) OnWindowResize(event *sdl.WindowEvent, app *App) {
 }
 
 func (viewPort *ViewPort) OnMouseWheel(event *sdl.MouseWheelEvent) {
+	// scroll only in one direction at a time
 	if Abs(event.X) > Abs(event.Y) {
-		viewPort.ShowHorizontalScrollBar = 1000
+		viewPort.ShowHorizontalScrollBar = ViewPortScrollBarDisplayMs
 		viewPort.ShowVerticalScrollBar = 0
-		newHorizontalScroll := Min(viewPort.HorizontalScroll+10*event.X, 0)
-		if viewPort.Rect.W-newHorizontalScroll > viewPort.MaxUsedX()+ViewPortRightScrollMargin {
+		// disallow scrolling beyond into negative coordinates
+		newHorizontalScroll := Min(viewPort.HorizontalScroll-ViewPortScrollSpeed*event.X, 0)
+		if newHorizontalScroll < viewPort.MaxScrollX() {
+			viewPort.HorizontalScroll = viewPort.MaxScrollX()
 		} else {
 			viewPort.HorizontalScroll = newHorizontalScroll
 		}
 	} else if Abs(event.X) < Abs(event.Y) {
 		viewPort.ShowHorizontalScrollBar = 0
-		viewPort.ShowVerticalScrollBar = 1000
-		viewPort.VerticalScroll = Min(viewPort.VerticalScroll+10*event.Y, 0)
+		viewPort.ShowVerticalScrollBar = ViewPortScrollBarDisplayMs
+		// disallow scrolling beyond into negative coordinates
+		newVerticalScroll := Min(viewPort.VerticalScroll+ViewPortScrollSpeed*event.Y, 0)
+		if newVerticalScroll < viewPort.MaxScrollY() {
+			viewPort.VerticalScroll = viewPort.MaxScrollY()
+		} else {
+			viewPort.VerticalScroll = newVerticalScroll
+		}
 	}
 }
 
