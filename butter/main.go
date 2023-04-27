@@ -1,9 +1,12 @@
 package main
 
 import (
+	_ "fmt"
 	"github.com/veandco/go-sdl2/sdl"
 	"github.com/veandco/go-sdl2/ttf"
 	"golang.org/x/exp/constraints"
+	"math/rand"
+	"strconv"
 )
 
 const WindowDefaultWidth = 800
@@ -180,6 +183,11 @@ func (button *ButtonAddTable) OnMouseButtonEvent(event *sdl.MouseButtonEvent, ap
 					panic("Reached table count limit!")
 				}
 				newTable := Table{Rect: sdl.Rect{W: 150, H: 100}, ViewPort: &app.ViewPort}
+				for i := 0; i < 3; i++ {
+					for j := 0; j < 3; j++ {
+						newTable.Values[i][j] = rand.Int() % 10000
+					}
+				}
 				placeNewTable(&newTable, app.ViewPort.Tables[:app.ViewPort.TablesCount])
 				app.ViewPort.Tables[app.ViewPort.TablesCount] = newTable
 				app.ViewPort.TablesCount++
@@ -203,9 +211,11 @@ type Table struct {
 	Grabbed           bool
 	GrabHandleVisible bool
 	GrabHandle        sdl.Rect
+	Values            [3][3]int
 }
 
-func (table *Table) Render(viewPort *ViewPort, renderer *sdl.Renderer) {
+func (table *Table) Render(viewPort *ViewPort, renderer *sdl.Renderer, window *sdl.Window) {
+	// render frame
 	rect := sdl.Rect{
 		X: viewPort.Rect.X + table.Rect.X + viewPort.HorizontalScroll,
 		Y: viewPort.Rect.Y + table.Rect.Y + viewPort.VerticalScroll,
@@ -219,6 +229,55 @@ func (table *Table) Render(viewPort *ViewPort, renderer *sdl.Renderer) {
 	renderer.SetDrawColor(0, 0, 0, 255)
 	renderer.DrawRect(&rect)
 
+	// render data
+	renderer.SetDrawColor(0, 0, 0, 255)
+	for x := table.Rect.X; x < table.Rect.X+table.Rect.W; x += table.Rect.W / 3 {
+		x1 := viewPort.HorizontalScroll + viewPort.Rect.X + x
+		y1 := viewPort.VerticalScroll + viewPort.Rect.Y + table.Rect.Y
+		x2 := viewPort.HorizontalScroll + viewPort.Rect.X + x
+		y2 := viewPort.VerticalScroll + viewPort.Rect.Y + table.Rect.Y + table.Rect.H - 1
+		visible := viewPort.Rect.IntersectLine(&x1, &y1, &x2, &y2)
+		if visible {
+			renderer.DrawLine(x1, y1, x2, y2)
+		}
+	}
+	for y := table.Rect.Y; y < table.Rect.Y+table.Rect.H; y += table.Rect.H / 3 {
+		x1 := viewPort.HorizontalScroll + viewPort.Rect.X + table.Rect.X
+		y1 := viewPort.VerticalScroll + viewPort.Rect.Y + y
+		x2 := viewPort.HorizontalScroll + viewPort.Rect.X + table.Rect.X + table.Rect.W - 1
+		y2 := viewPort.VerticalScroll + viewPort.Rect.Y + y
+		visible := viewPort.Rect.IntersectLine(&x1, &y1, &x2, &y2)
+		if visible {
+			renderer.DrawLine(x1, y1, x2, y2)
+		}
+	}
+
+	font, _ := TtfOpenFont(window, renderer, "assets/Lato/Lato-Regular.ttf", 10)
+	for xi := int32(0); xi < 3; xi++ {
+		for yi := int32(0); yi < 3; yi++ {
+			fontSurface, _ := font.RenderUTF8Blended(strconv.Itoa(table.Values[yi][xi]), sdl.Color{R: 0, G: 0, B: 0, A: 255})
+			textTexture, _ := renderer.CreateTextureFromSurface(fontSurface)
+			_, _, w, h, _ := textTexture.Query()
+			dst := sdl.Rect{
+				X: viewPort.Rect.X + table.Rect.X + viewPort.HorizontalScroll + xi*table.Rect.W/3,
+				Y: viewPort.Rect.Y + table.Rect.Y + viewPort.VerticalScroll + yi*table.Rect.H/3,
+				W: w,
+				H: h,
+			}
+			dst, dstNonEmpty := dst.Intersect(&viewPort.Rect)
+			if dstNonEmpty {
+				RendererCopy(
+					window,
+					renderer,
+					textTexture,
+					&sdl.Rect{X: 0, Y: 0, W: dst.W, H: dst.H},
+					&dst,
+				)
+			}
+		}
+	}
+
+	// render grab handle
 	if table.GrabHandleVisible {
 		table.GrabHandle = sdl.Rect{
 			X: table.ViewPort.Rect.X + table.Rect.X + viewPort.HorizontalScroll,
@@ -523,7 +582,7 @@ func main() {
 	app := App{
 		Window:     window,
 		Renderer:   renderer,
-		ViewPort:   ViewPort{Rect: sdl.Rect{X: 10, Y: 55, W: 200, H: 200}},
+		ViewPort:   ViewPort{Rect: sdl.Rect{X: 10, Y: 55}},
 		Components: []Component{&buttonAddTable},
 	}
 
@@ -543,7 +602,7 @@ func main() {
 			button.Render(renderer, &app)
 		}
 		for i := 0; i < app.ViewPort.TablesCount; i++ {
-			app.ViewPort.Tables[i].Render(&app.ViewPort, renderer)
+			app.ViewPort.Tables[i].Render(&app.ViewPort, renderer, window)
 		}
 
 		renderer.Present()
