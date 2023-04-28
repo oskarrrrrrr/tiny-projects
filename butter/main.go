@@ -421,7 +421,8 @@ func (viewPort *ViewPort) Render(renderer *sdl.Renderer, app *App) {
 	renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 
 	if viewPort.ShowHorizontalScrollBar > 0 {
-		viewRatio := float32(viewPort.Rect.W) / float32(viewPort.MaxViewableX())
+		maxX := Max(viewPort.MaxViewableX(), viewPort.Rect.W-viewPort.HorizontalScroll)
+		viewRatio := float32(viewPort.Rect.W) / float32(maxX)
 		renderer.FillRect(&sdl.Rect{
 			X: viewPort.Rect.X - int32(float32(viewPort.HorizontalScroll)*viewRatio),
 			Y: viewPort.Rect.Y + viewPort.Rect.H - ViewPortScrollBarDim,
@@ -431,7 +432,8 @@ func (viewPort *ViewPort) Render(renderer *sdl.Renderer, app *App) {
 	}
 
 	if viewPort.ShowVerticalScrollBar > 0 {
-		viewRatio := float32(viewPort.Rect.H) / float32(viewPort.MaxViewableY())
+		maxY := Max(viewPort.MaxViewableY(), viewPort.Rect.H-viewPort.VerticalScroll)
+		viewRatio := float32(viewPort.Rect.H) / float32(maxY)
 		renderer.FillRect(&sdl.Rect{
 			X: viewPort.Rect.X + viewPort.Rect.W - ViewPortScrollBarDim,
 			Y: viewPort.Rect.Y - int32(float32(viewPort.VerticalScroll)*viewRatio),
@@ -448,26 +450,49 @@ func (viewPort *ViewPort) OnWindowResize(event *sdl.WindowEvent, app *App) {
 }
 
 func (viewPort *ViewPort) OnMouseWheel(event *sdl.MouseWheelEvent) {
-	// scroll only in one direction at a time
+	// We handle only one scroll at a time, meaning that the user can only scroll
+	// vertically or only horizontally at a time.
 	if Abs(event.X) > Abs(event.Y) {
 		viewPort.ShowHorizontalScrollBar = ViewPortScrollBarDisplayMs
 		viewPort.ShowVerticalScrollBar = 0
+		dx := ViewPortScrollSpeed * event.X
+		maxScrollX := viewPort.MaxScrollX()
+
 		// disallow scrolling beyond into negative coordinates
-		newHorizontalScroll := Min(viewPort.HorizontalScroll-ViewPortScrollSpeed*event.X, 0)
-		if newHorizontalScroll < viewPort.MaxScrollX() {
-			viewPort.HorizontalScroll = viewPort.MaxScrollX()
-		} else {
+		newHorizontalScroll := Min(viewPort.HorizontalScroll-dx, 0)
+
+		if newHorizontalScroll >= maxScrollX {
+			// Scroll is within bounds, the simple case.
 			viewPort.HorizontalScroll = newHorizontalScroll
+		} else {
+			// All the objects in the view port are offset by the scroll so if it's negative then
+			// the object are moved to the left and we are seeing more of things on the right.
+			// Maximum scroll is a negative number and being below the max scroll means being
+			// too far on the right.
+			if dx < 0 {
+				// Going left, back from further than "maximum". Happens whenver an object is moved to the left
+				// so that the maximum viewable X is decreased. We do not want to snap back to maximum
+				// viewable X, rather we allow the user to scroll back.
+				viewPort.HorizontalScroll = newHorizontalScroll
+			} else if viewPort.HorizontalScroll >= maxScrollX {
+				// Going right, make sure that we can reach the maximum scroll.
+				viewPort.HorizontalScroll = maxScrollX
+			}
 		}
-	} else if Abs(event.X) < Abs(event.Y) {
+	} else if Abs(event.X) < Abs(event.Y) { // Analogous to the case above.
 		viewPort.ShowHorizontalScrollBar = 0
 		viewPort.ShowVerticalScrollBar = ViewPortScrollBarDisplayMs
-		// disallow scrolling beyond into negative coordinates
-		newVerticalScroll := Min(viewPort.VerticalScroll+ViewPortScrollSpeed*event.Y, 0)
-		if newVerticalScroll < viewPort.MaxScrollY() {
-			viewPort.VerticalScroll = viewPort.MaxScrollY()
-		} else {
+		dy := ViewPortScrollSpeed * event.Y
+		maxScrollY := viewPort.MaxScrollY()
+		newVerticalScroll := Min(viewPort.VerticalScroll+dy, 0)
+		if newVerticalScroll >= maxScrollY {
 			viewPort.VerticalScroll = newVerticalScroll
+		} else {
+			if dy > 0 {
+				viewPort.VerticalScroll = newVerticalScroll
+			} else if viewPort.VerticalScroll >= maxScrollY {
+				viewPort.VerticalScroll = maxScrollY
+			}
 		}
 	}
 }
