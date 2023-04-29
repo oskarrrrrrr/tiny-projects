@@ -1,7 +1,6 @@
 package main
 
 import (
-	_ "fmt"
 	"github.com/veandco/go-sdl2/sdl"
 	"github.com/veandco/go-sdl2/ttf"
 	"golang.org/x/exp/constraints"
@@ -212,43 +211,65 @@ type Table struct {
 	GrabHandleVisible bool
 	GrabHandle        sdl.Rect
 	Values            [3][3]int
+	ShowActiveCell    bool
+	ActiveCellX       int32
+	ActiveCellY       int32
+}
+
+func (table *Table) GetX(x int32) int32 {
+	return table.ViewPort.GetX(x) + table.Rect.X + x
+}
+
+func (table *Table) GetY(y int32) int32 {
+	return table.ViewPort.GetY(y) + table.Rect.Y + y
+}
+
+func (table *Table) GetRect(x, y, w, h int32) (sdl.Rect, bool) {
+	return table.ViewPort.GetRect(table.Rect.X+x, table.Rect.Y+y, w, h)
 }
 
 func (table *Table) Render(viewPort *ViewPort, renderer *sdl.Renderer, window *sdl.Window) {
 	// render frame
-	rect := sdl.Rect{
-		X: viewPort.Rect.X + table.Rect.X + viewPort.HorizontalScroll,
-		Y: viewPort.Rect.Y + table.Rect.Y + viewPort.VerticalScroll,
-		W: table.Rect.W,
-		H: table.Rect.H,
-	}
-	rect, rectNonEmpty := rect.Intersect(&viewPort.Rect)
-	if !rectNonEmpty {
+	rect, visible := table.GetRect(0, 0, table.Rect.W, table.Rect.H)
+	if !visible {
 		return
 	}
 	renderer.SetDrawColor(0, 0, 0, 255)
 	renderer.DrawRect(&rect)
 
+	// render active cell
+	if table.ShowActiveCell {
+		renderer.SetDrawColor(96, 96, 96, 172)
+		renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+		rect, visible := table.GetRect(
+			table.ActiveCellX*(table.Rect.W/3),
+			table.ActiveCellY*(table.Rect.H/3),
+			table.Rect.W/3,
+			table.Rect.H/3,
+		)
+		if visible {
+			renderer.FillRect(&rect)
+		}
+	}
+
 	// render data
 	renderer.SetDrawColor(0, 0, 0, 255)
 	for x := table.Rect.X; x < table.Rect.X+table.Rect.W; x += table.Rect.W / 3 {
-		x1 := viewPort.HorizontalScroll + viewPort.Rect.X + x
-		y1 := viewPort.VerticalScroll + viewPort.Rect.Y + table.Rect.Y
-		x2 := viewPort.HorizontalScroll + viewPort.Rect.X + x
-		y2 := viewPort.VerticalScroll + viewPort.Rect.Y + table.Rect.Y + table.Rect.H - 1
-		visible := viewPort.Rect.IntersectLine(&x1, &y1, &x2, &y2)
+		x := table.ViewPort.GetX(x)
+		y1 := table.ViewPort.GetY(table.Rect.Y)
+		y2 := table.ViewPort.GetY(table.Rect.Y + table.Rect.H - 1)
+		visible := viewPort.Rect.IntersectLine(&x, &y1, &x, &y2)
 		if visible {
-			renderer.DrawLine(x1, y1, x2, y2)
+			renderer.DrawLine(x, y1, x, y2)
 		}
 	}
 	for y := table.Rect.Y; y < table.Rect.Y+table.Rect.H; y += table.Rect.H / 3 {
-		x1 := viewPort.HorizontalScroll + viewPort.Rect.X + table.Rect.X
-		y1 := viewPort.VerticalScroll + viewPort.Rect.Y + y
-		x2 := viewPort.HorizontalScroll + viewPort.Rect.X + table.Rect.X + table.Rect.W - 1
-		y2 := viewPort.VerticalScroll + viewPort.Rect.Y + y
-		visible := viewPort.Rect.IntersectLine(&x1, &y1, &x2, &y2)
+		y := table.ViewPort.GetY(y)
+		x1 := table.ViewPort.GetX(table.Rect.X)
+		x2 := table.ViewPort.GetX(table.Rect.X + table.Rect.W - 1)
+		visible := viewPort.Rect.IntersectLine(&x1, &y, &x2, &y)
 		if visible {
-			renderer.DrawLine(x1, y1, x2, y2)
+			renderer.DrawLine(x1, y, x2, y)
 		}
 	}
 
@@ -258,14 +279,8 @@ func (table *Table) Render(viewPort *ViewPort, renderer *sdl.Renderer, window *s
 			fontSurface, _ := font.RenderUTF8Blended(strconv.Itoa(table.Values[yi][xi]), sdl.Color{R: 0, G: 0, B: 0, A: 255})
 			textTexture, _ := renderer.CreateTextureFromSurface(fontSurface)
 			_, _, w, h, _ := textTexture.Query()
-			dst := sdl.Rect{
-				X: viewPort.Rect.X + table.Rect.X + viewPort.HorizontalScroll + xi*table.Rect.W/3,
-				Y: viewPort.Rect.Y + table.Rect.Y + viewPort.VerticalScroll + yi*table.Rect.H/3,
-				W: w,
-				H: h,
-			}
-			dst, dstNonEmpty := dst.Intersect(&viewPort.Rect)
-			if dstNonEmpty {
+			dst, visible := table.GetRect(xi*table.Rect.W/3, yi*table.Rect.H/3, w, h)
+			if visible {
 				RendererCopy(
 					window,
 					renderer,
@@ -279,33 +294,45 @@ func (table *Table) Render(viewPort *ViewPort, renderer *sdl.Renderer, window *s
 
 	// render grab handle
 	if table.GrabHandleVisible {
-		table.GrabHandle = sdl.Rect{
-			X: table.ViewPort.Rect.X + table.Rect.X + viewPort.HorizontalScroll,
-			Y: table.ViewPort.Rect.Y + table.Rect.Y + viewPort.VerticalScroll,
-			W: TableGrabHandleSize,
-			H: TableGrabHandleSize,
-		}
-		rect, rectNonEmpty := table.GrabHandle.Intersect(&table.ViewPort.Rect)
-		if rectNonEmpty {
+		var visible bool
+		table.GrabHandle, visible = table.GetRect(0, 0, TableGrabHandleSize, TableGrabHandleSize)
+		if visible {
 			renderer.SetDrawColor(0, 0, 128, 255)
-			renderer.FillRect(&rect)
+			renderer.FillRect(&table.GrabHandle)
+		}
+	}
+}
+
+func (table *Table) handleArrowKeys(event *sdl.KeyboardEvent) {
+	if !table.ShowActiveCell {
+		return
+	}
+	if event.Type == sdl.KEYDOWN {
+		switch event.Keysym.Scancode {
+		case sdl.SCANCODE_DOWN:
+			table.ActiveCellY = Min(table.ActiveCellY+1, 2)
+		case sdl.SCANCODE_UP:
+			table.ActiveCellY = Max(table.ActiveCellY-1, 0)
+		case sdl.SCANCODE_LEFT:
+			table.ActiveCellX = Max(table.ActiveCellX-1, 0)
+		case sdl.SCANCODE_RIGHT:
+			table.ActiveCellX = Min(table.ActiveCellX+1, 2)
 		}
 	}
 }
 
 func (table *Table) pointInside(x, y int32) bool {
-	rect := sdl.Rect{
-		X: table.ViewPort.Rect.X + table.Rect.X + table.ViewPort.HorizontalScroll,
-		Y: table.ViewPort.Rect.Y + table.Rect.Y + table.ViewPort.VerticalScroll,
-		H: table.Rect.H,
-		W: table.Rect.W,
-	}
+	rect, _ := table.GetRect(0, 0, table.Rect.W, table.Rect.H)
 	return pointInRect(x, y, rect)
 }
 
 func (table *Table) OnMouseButtonEvent(event *sdl.MouseButtonEvent, app *App) bool {
 	if event.Button == sdl.BUTTON_LEFT {
 		if event.Type == sdl.MOUSEBUTTONDOWN {
+			if table.ShowActiveCell = table.pointInside(event.X, event.Y); table.ShowActiveCell {
+				table.ActiveCellX = (event.X - table.GetX(0)) / (table.Rect.W / 3)
+				table.ActiveCellY = (event.Y - table.GetY(0)) / (table.Rect.H / 3)
+			}
 			if table.GrabHandleVisible {
 				table.Grabbed = pointInRect(event.X, event.Y, table.GrabHandle)
 			}
@@ -370,6 +397,20 @@ type ViewPort struct {
 	// Time left in ms to show the horizontal scroll bar
 	ShowHorizontalScrollBar int
 	HorizontalScroll        int32
+}
+
+func (viewPort *ViewPort) GetX(x int32) int32 {
+	return viewPort.Rect.X + viewPort.HorizontalScroll + x
+}
+
+func (viewPort *ViewPort) GetY(y int32) int32 {
+	return viewPort.Rect.Y + viewPort.VerticalScroll + y
+}
+
+func (viewPort *ViewPort) GetRect(x, y, w, h int32) (rect sdl.Rect, visible bool) {
+	rect = sdl.Rect{X: viewPort.GetX(x), Y: viewPort.GetY(y), W: w, H: h}
+	rect, visible = rect.Intersect(&viewPort.Rect)
+	return
 }
 
 // MaxUsedX returns the x coordinate of the rightmost point of the rightmost element on the viewPort
@@ -550,13 +591,15 @@ func handleEvents(app *App) bool {
 			if event.Type == sdl.KEYDOWN && event.Keysym.Scancode == sdl.SCANCODE_Q {
 				return false
 			}
-		case *sdl.MouseButtonEvent:
-			click_registered := false
-			for i := range app.Components {
-				click_registered = click_registered || app.Components[i].OnMouseButtonEvent(event, app)
+			for i := 0; i < app.ViewPort.TablesCount; i++ {
+				app.ViewPort.Tables[i].handleArrowKeys(event)
 			}
-			for i := range app.ViewPort.Tables {
-				click_registered = click_registered || app.ViewPort.Tables[i].OnMouseButtonEvent(event, app)
+		case *sdl.MouseButtonEvent:
+			for i := range app.Components {
+				app.Components[i].OnMouseButtonEvent(event, app)
+			}
+			for i := 0; i < app.ViewPort.TablesCount; i++ {
+				app.ViewPort.Tables[i].OnMouseButtonEvent(event, app)
 			}
 		case *sdl.MouseMotionEvent:
 			for i := range app.Components {
