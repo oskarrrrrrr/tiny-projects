@@ -203,6 +203,9 @@ func (button *ButtonAddTable) OnMouseMotionEvent(event *sdl.MouseMotionEvent, ap
 
 const TableGrabHandleSize = 10
 
+// Horizontal cell text margin as a proportion of cell width
+const TableCellTextHorizontalMargin = 0.05
+
 type Table struct {
 	ViewPort          *ViewPort
 	Rect              sdl.Rect
@@ -228,6 +231,14 @@ func (table *Table) GetRect(x, y, w, h int32) (sdl.Rect, bool) {
 	return table.ViewPort.GetRect(table.Rect.X+x, table.Rect.Y+y, w, h)
 }
 
+func (table *Table) CellW() float32 {
+	return float32(table.Rect.W) / 3
+}
+
+func (table *Table) CellH() float32 {
+	return float32(table.Rect.H) / 3
+}
+
 func (table *Table) Render(viewPort *ViewPort, renderer *sdl.Renderer, window *sdl.Window) {
 	// render frame
 	rect, visible := table.GetRect(0, 0, table.Rect.W, table.Rect.H)
@@ -239,23 +250,23 @@ func (table *Table) Render(viewPort *ViewPort, renderer *sdl.Renderer, window *s
 
 	// render active cell
 	if table.ShowActiveCell {
-		renderer.SetDrawColor(96, 96, 96, 172)
-		renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 		rect, visible := table.GetRect(
-			table.ActiveCellX*(table.Rect.W/3),
-			table.ActiveCellY*(table.Rect.H/3),
-			table.Rect.W/3,
-			table.Rect.H/3,
+			table.ActiveCellX*int32(table.CellW()),
+			table.ActiveCellY*int32(table.CellH()),
+			int32(table.CellW()),
+			int32(table.CellH()),
 		)
 		if visible {
+			renderer.SetDrawColor(96, 96, 96, 172)
+			renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
 			renderer.FillRect(&rect)
 		}
 	}
 
 	// render data
 	renderer.SetDrawColor(0, 0, 0, 255)
-	for x := table.Rect.X; x < table.Rect.X+table.Rect.W; x += table.Rect.W / 3 {
-		x := table.ViewPort.GetX(x)
+	for x := float32(table.Rect.X); x < float32(table.Rect.X+table.Rect.W); x += table.CellW() {
+		x := table.ViewPort.GetX(int32(x))
 		y1 := table.ViewPort.GetY(table.Rect.Y)
 		y2 := table.ViewPort.GetY(table.Rect.Y + table.Rect.H - 1)
 		visible := viewPort.Rect.IntersectLine(&x, &y1, &x, &y2)
@@ -263,8 +274,8 @@ func (table *Table) Render(viewPort *ViewPort, renderer *sdl.Renderer, window *s
 			renderer.DrawLine(x, y1, x, y2)
 		}
 	}
-	for y := table.Rect.Y; y < table.Rect.Y+table.Rect.H; y += table.Rect.H / 3 {
-		y := table.ViewPort.GetY(y)
+	for y := float32(table.Rect.Y); y < float32(table.Rect.Y+table.Rect.H); y += table.CellH() {
+		y := table.ViewPort.GetY(int32(y))
 		x1 := table.ViewPort.GetX(table.Rect.X)
 		x2 := table.ViewPort.GetX(table.Rect.X + table.Rect.W - 1)
 		visible := viewPort.Rect.IntersectLine(&x1, &y, &x2, &y)
@@ -279,7 +290,15 @@ func (table *Table) Render(viewPort *ViewPort, renderer *sdl.Renderer, window *s
 			fontSurface, _ := font.RenderUTF8Blended(strconv.Itoa(table.Values[yi][xi]), sdl.Color{R: 0, G: 0, B: 0, A: 255})
 			textTexture, _ := renderer.CreateTextureFromSurface(fontSurface)
 			_, _, w, h, _ := textTexture.Query()
-			dst, visible := table.GetRect(xi*table.Rect.W/3, yi*table.Rect.H/3, w, h)
+			_, ys := GetWindowScale(window, renderer)
+			dst, visible := table.GetRect(
+				// left adjusted
+				int32(float32(xi)*table.CellW()+table.CellW()*TableCellTextHorizontalMargin),
+				// vertically centered
+				int32(float32(yi)*table.CellH()+((table.CellH()-float32(h))/2)*ys),
+				w,
+				h,
+			)
 			if visible {
 				RendererCopy(
 					window,
@@ -326,12 +345,18 @@ func (table *Table) pointInside(x, y int32) bool {
 	return pointInRect(x, y, rect)
 }
 
+// Get row and column of the cell in table at position (x, y) on the screen.
+func (table *Table) GetCellAtPos(x, y int32) (row, col int32) {
+	row = (x - table.GetX(0)) / int32(table.CellW())
+	col = (y - table.GetY(0)) / int32(table.CellH())
+	return
+}
+
 func (table *Table) OnMouseButtonEvent(event *sdl.MouseButtonEvent, app *App) bool {
 	if event.Button == sdl.BUTTON_LEFT {
 		if event.Type == sdl.MOUSEBUTTONDOWN {
 			if table.ShowActiveCell = table.pointInside(event.X, event.Y); table.ShowActiveCell {
-				table.ActiveCellX = (event.X - table.GetX(0)) / (table.Rect.W / 3)
-				table.ActiveCellY = (event.Y - table.GetY(0)) / (table.Rect.H / 3)
+				table.ActiveCellX, table.ActiveCellY = table.GetCellAtPos(event.X, event.Y)
 			}
 			if table.GrabHandleVisible {
 				table.Grabbed = pointInRect(event.X, event.Y, table.GrabHandle)
@@ -343,6 +368,7 @@ func (table *Table) OnMouseButtonEvent(event *sdl.MouseButtonEvent, app *App) bo
 	return table.Grabbed
 }
 
+// TODO: move this function to ViewPort, because it needs to know about all the tables
 func (table *Table) canMove(tables []Table, count int, dx, dy int32) bool {
 	if table.Rect.X+dx < 0 || table.Rect.Y+dy < 0 {
 		return false
@@ -585,9 +611,6 @@ func handleEvents(app *App) bool {
 		case *sdl.QuitEvent:
 			return false
 		case *sdl.KeyboardEvent:
-			if event.Repeat != 0 {
-				continue
-			}
 			if event.Type == sdl.KEYDOWN && event.Keysym.Scancode == sdl.SCANCODE_Q {
 				return false
 			}
@@ -622,9 +645,11 @@ func handleEvents(app *App) bool {
 
 func RendererCopy(window *sdl.Window, renderer *sdl.Renderer, texture *sdl.Texture, src *sdl.Rect, dst *sdl.Rect) {
 	xs, ys := GetWindowScale(window, renderer)
-	dst.W = int32(float32(dst.W) / xs)
-	dst.H = int32(float32(dst.H) / ys)
-	renderer.Copy(texture, src, dst)
+	scaled_dst := sdl.Rect{X: dst.X, Y: dst.Y, W: int32(float32(dst.W) / xs), H: int32(float32(dst.H) / ys)}
+	renderer.Copy(texture, src, &scaled_dst)
+	// For debugging:
+	// renderer.SetDrawColor(255, 0, 0, 255)
+	// renderer.DrawRect(&scaled_dst)
 }
 
 func TtfOpenFont(window *sdl.Window, renderer *sdl.Renderer, fontFileName string, size uint32) (*ttf.Font, error) {
