@@ -4,8 +4,7 @@ import (
 	"github.com/veandco/go-sdl2/sdl"
 	"github.com/veandco/go-sdl2/ttf"
 	"golang.org/x/exp/constraints"
-	"math/rand"
-	"strconv"
+	"strings"
 )
 
 const WindowDefaultWidth = 800
@@ -23,6 +22,7 @@ type App struct {
 	Window   *sdl.Window
 	Renderer *sdl.Renderer
 
+	TextBox    TextBox
 	ViewPort   ViewPort
 	Components []Component
 	PrevTicks  uint32
@@ -75,6 +75,130 @@ func Abs[T constraints.Integer](x T) T {
 		return x
 	}
 	return -x
+}
+
+type TextBox struct {
+	Rect   sdl.Rect
+	Text   *string
+	Active bool
+	// cursor
+	CursorVisible          bool
+	CursorBlinkTimeCounter uint32
+	CursorBlinkSpeedMs     uint32
+}
+
+func (textBox *TextBox) Clear() *string {
+	oldText := textBox.Text
+	textBox.Text = new(string)
+	return oldText
+}
+
+func (textBox *TextBox) Render(renderer *sdl.Renderer, app *App) {
+	// update cursor
+	textBox.CursorBlinkTimeCounter += app.MsChange()
+	if textBox.CursorBlinkTimeCounter > textBox.CursorBlinkSpeedMs {
+		textBox.CursorBlinkTimeCounter = 0
+		textBox.CursorVisible = !textBox.CursorVisible
+	}
+
+	renderer.SetDrawColor(0, 0, 0, 255)
+	renderer.DrawRect(&textBox.Rect)
+
+	xs, ys := GetWindowScale(app.Window, renderer)
+
+	font, _ := TtfOpenFont(app.Window, app.Renderer, "assets/Lato/Lato-Regular.ttf", 12)
+	promptSurface, _ := font.RenderUTF8Blended("> ", sdl.Color{R: 0, G: 0, B: 0, A: 255})
+	promptTexture, _ := renderer.CreateTextureFromSurface(promptSurface)
+	promptRect := sdl.Rect{
+		X: textBox.Rect.X + 5,
+		Y: textBox.Rect.Y + (textBox.Rect.H-int32(float32(promptSurface.H)/ys))/2,
+		W: promptSurface.W,
+		H: promptSurface.H,
+	}
+	RendererCopy(
+		app.Window,
+		app.Renderer,
+		promptTexture,
+		nil,
+		&promptRect,
+	)
+
+	if textBox.Active {
+		if textBox.Text != nil && *textBox.Text != "" {
+			// render text
+			fontSurface, _ := font.RenderUTF8Blended(*textBox.Text, sdl.Color{R: 0, G: 0, B: 0, A: 255})
+			textTexture, _ := renderer.CreateTextureFromSurface(fontSurface)
+			textRect := sdl.Rect{
+				X: promptRect.X + int32(float32(promptRect.W)/xs),
+				Y: textBox.Rect.Y + (textBox.Rect.H-int32(float32(fontSurface.H)/ys))/2,
+				W: fontSurface.W,
+				H: fontSurface.H,
+			}
+			RendererCopy(
+				app.Window,
+				app.Renderer,
+				textTexture,
+				nil,
+				&textRect,
+			)
+			if textBox.CursorVisible {
+				renderer.SetDrawColor(0, 0, 0, 255)
+				x := textRect.X + int32(float32(textRect.W)/xs) + 1
+				renderer.DrawLine(x, textRect.Y, x, textRect.Y+int32(float32(textRect.H)/ys))
+			}
+		} else {
+			if textBox.CursorVisible {
+				renderer.SetDrawColor(0, 0, 0, 255)
+				x := promptRect.X + int32(float32(promptRect.W)/xs) + 1
+				renderer.DrawLine(x, promptRect.Y, x, promptRect.Y+int32(float32(promptRect.H)/ys))
+			}
+		}
+	} else {
+		renderer.SetDrawColor(96, 96, 96, 122)
+		renderer.SetDrawBlendMode(sdl.BLENDMODE_BLEND)
+		renderer.FillRect(&textBox.Rect)
+	}
+}
+
+func (textBox *TextBox) OnMouseButtonEvent(event *sdl.MouseButtonEvent) {
+	textBox.Active = pointInRect(event.X, event.Y, textBox.Rect)
+}
+
+func (textBox *TextBox) OnKeyPress(event *sdl.KeyboardEvent) {
+	if event.Type == sdl.KEYUP {
+		return
+	}
+
+	if event.Keysym.Scancode == sdl.SCANCODE_BACKSPACE {
+		if textBox.Text != nil && *textBox.Text != "" {
+			*textBox.Text = (*textBox.Text)[:len(*textBox.Text)-1]
+		}
+		return
+	}
+
+	if event.Keysym.Scancode == sdl.SCANCODE_SPACE {
+		var s string
+		if textBox.Text != nil {
+			s = *textBox.Text + " "
+		}
+		textBox.Text = &s
+		return
+	}
+
+	keyName := sdl.GetKeyName(sdl.GetKeyFromScancode(event.Keysym.Scancode))
+	if len(keyName) == 1 {
+		var s string
+		c := keyName[0]
+		if event.Keysym.Mod&sdl.KMOD_SHIFT != 0 {
+			s = strings.ToUpper(string(c))
+		} else {
+			s = strings.ToLower(string(c))
+		}
+		if textBox.Text != nil {
+			s = *textBox.Text + s
+		}
+		textBox.Text = &s
+	}
 }
 
 type ButtonAddTable struct {
@@ -184,7 +308,8 @@ func (button *ButtonAddTable) OnMouseButtonEvent(event *sdl.MouseButtonEvent, ap
 				newTable := Table{Rect: sdl.Rect{W: 150, H: 100}, ViewPort: &app.ViewPort}
 				for i := 0; i < 3; i++ {
 					for j := 0; j < 3; j++ {
-						newTable.Values[i][j] = rand.Int() % 10000
+						// newTable.Values[i][j] = strconv.Itoa(rand.Int() % 10000)
+						newTable.Values[i][j] = "mango mango mango"
 					}
 				}
 				placeNewTable(&newTable, app.ViewPort.Tables[:app.ViewPort.TablesCount])
@@ -213,7 +338,7 @@ type Table struct {
 	Grabbed           bool
 	GrabHandleVisible bool
 	GrabHandle        sdl.Rect
-	Values            [3][3]int
+	Values            [3][3]string
 	ShowActiveCell    bool
 	ActiveCellX       int32
 	ActiveCellY       int32
@@ -287,10 +412,10 @@ func (table *Table) Render(viewPort *ViewPort, renderer *sdl.Renderer, window *s
 	font, _ := TtfOpenFont(window, renderer, "assets/Lato/Lato-Regular.ttf", 10)
 	for xi := int32(0); xi < 3; xi++ {
 		for yi := int32(0); yi < 3; yi++ {
-			fontSurface, _ := font.RenderUTF8Blended(strconv.Itoa(table.Values[yi][xi]), sdl.Color{R: 0, G: 0, B: 0, A: 255})
+			fontSurface, _ := font.RenderUTF8Blended(table.Values[yi][xi], sdl.Color{R: 0, G: 0, B: 0, A: 255})
 			textTexture, _ := renderer.CreateTextureFromSurface(fontSurface)
 			_, _, w, h, _ := textTexture.Query()
-			_, ys := GetWindowScale(window, renderer)
+			xs, ys := GetWindowScale(window, renderer)
 			dst, visible := table.GetRect(
 				// left adjusted
 				int32(float32(xi)*table.CellW()+table.CellW()*TableCellTextHorizontalMargin),
@@ -300,6 +425,14 @@ func (table *Table) Render(viewPort *ViewPort, renderer *sdl.Renderer, window *s
 				h,
 			)
 			if visible {
+				rect, _ := table.GetRect(
+					int32(float32(xi)*table.CellW()),
+					int32(float32(yi)*table.CellH()),
+					// TODO: fix the magical 0.99. Without it the text spills slightly beyond the last cell
+					int32(table.CellW()*xs*0.99),
+					int32(table.CellH()),
+				)
+				dst, _ = dst.Intersect(&rect)
 				RendererCopy(
 					window,
 					renderer,
@@ -611,13 +744,15 @@ func handleEvents(app *App) bool {
 		case *sdl.QuitEvent:
 			return false
 		case *sdl.KeyboardEvent:
-			if event.Type == sdl.KEYDOWN && event.Keysym.Scancode == sdl.SCANCODE_Q {
+			if event.Type == sdl.KEYDOWN && event.Keysym.Scancode == sdl.SCANCODE_Q && !app.TextBox.Active {
 				return false
 			}
 			for i := 0; i < app.ViewPort.TablesCount; i++ {
 				app.ViewPort.Tables[i].handleArrowKeys(event)
 			}
+			app.TextBox.OnKeyPress(event)
 		case *sdl.MouseButtonEvent:
+			app.TextBox.OnMouseButtonEvent(event)
 			for i := range app.Components {
 				app.Components[i].OnMouseButtonEvent(event, app)
 			}
@@ -672,9 +807,15 @@ func main() {
 		TimeoutMs:    200,
 	}
 
+	textBox := TextBox{
+		Rect:               sdl.Rect{X: 55, Y: 15, W: 330, H: 25},
+		CursorBlinkSpeedMs: 750,
+	}
+
 	app := App{
 		Window:     window,
 		Renderer:   renderer,
+		TextBox:    textBox,
 		ViewPort:   ViewPort{Rect: sdl.Rect{X: 10, Y: 55}},
 		Components: []Component{&buttonAddTable},
 	}
@@ -689,6 +830,7 @@ func main() {
 		renderer.SetDrawColor(255, 255, 255, 255)
 		renderer.Clear()
 
+		app.TextBox.Render(renderer, &app)
 		app.ViewPort.Render(renderer, &app)
 
 		for _, button := range app.Components {
