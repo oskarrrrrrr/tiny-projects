@@ -1,1 +1,3 @@
-# Tiny Games
+# Tiny Projects
+
+Tiny side projects.

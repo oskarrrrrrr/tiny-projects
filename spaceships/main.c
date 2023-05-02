@@ -214,13 +214,13 @@ void SoundChunksCache_initialize() {
 
 /**
  * This function clears the cache. Make sure to call it before the program ends
- * so that all the textures can be destroyed.
+ * so that all the sound chunks can be destroyed.
  */
 void SoundChunksCache_destroy() {
     if (!_chunks_cache_initialized) {
         return;
     }
-    for (int i = 0; i < TEXTURE_END_MARKER; i++) {
+    for (int i = 0; i < SOUND_CHUNK_END_MARKER; i++) {
         if (_chunks_cache[i] != NULL) {
             Mix_FreeChunk(_chunks_cache[i]);
             _chunks_cache[i] = NULL;
@@ -245,6 +245,7 @@ void SoundChunkCache_play(SoundChunkType sound_chunk_type) {
             sdl_fail();
         }
     }
+    Mix_MasterVolume(MIX_MAX_VOLUME / 4);  // by default sounds are rather loud
     Mix_PlayChannel(-1, _chunks_cache[sound_chunk_type], 0);
 }
 
@@ -326,8 +327,7 @@ void Bullet_new_fill_regular_bullet(
     SDL_Renderer *renderer,
     Uint32 x,
     Uint32 y,
-    bool reverse,
-    Spaceship *spaceship
+    bool reverse
 ) {
     SDL_Rect rect = {x, y, BULLET_WIDTH, BULLET_HEIGHT};
     float bullet_speed = -BULLET_SPEED;
@@ -375,8 +375,7 @@ void BulletsManager_add_bullet(
         renderer,
         spaceship_rect->x + (spaceship_rect->w / 2.) - (BULLET_WIDTH / 2.),
         reverse ? spaceship_rect->y + spaceship_rect->h : spaceship_rect->y - BULLET_HEIGHT,
-        reverse,
-        spaceship
+        reverse
     );
     bullets->used[bullets->tail] = true;
     bullets->tail = (bullets->tail + 1) % MAX_BULLETS_NUM;
@@ -625,7 +624,7 @@ Explosion *get_spaceship_explosion(SDL_Renderer *renderer, Spaceship *spaceship)
     );
 }
 
-Uint32 apply_bullet_hits(SDL_Renderer *renderer, Spaceship *spaceship, BulletsManager *bullets_manager, Explosion **explosions) {
+Uint32 apply_bullet_hits(Spaceship *spaceship, BulletsManager *bullets_manager) {
     Uint32 killed = 0;
     Spaceship *curr = spaceship;
     while (curr != NULL) {
@@ -708,7 +707,7 @@ void spawn_enemies(Spaceship *spaceship, SDL_Renderer *renderer) {
 
     curr = last;
     Uint32 enemies_to_spawn = MIN(ENEMIES_COUNT - count, MAX_SPAWN);
-    for (int i = 0; i < enemies_to_spawn; i++) {
+    for (Uint32 i = 0; i < enemies_to_spawn; i++) {
         SDL_Rect rect;
         rect.w = SPACESHIP_WIDTH / 1.5;
         rect.h = SPACESHIP_HEIGHT / 1.5;
@@ -742,7 +741,7 @@ void make_enemies_shoot(Spaceship *spaceship, BulletsManager *bullets_manager, S
     }
 }
 
-void move_spaceships(Spaceship *spaceship, Explosion **explosions, SDL_Renderer *renderer) {
+void move_spaceships(Spaceship *spaceship) {
     Spaceship *curr = spaceship, *other;
     while (curr != NULL) {
         Entity_move(curr->entity);
@@ -1049,7 +1048,7 @@ void render_stars(SDL_Renderer *renderer) {
 }
 
 /**
- * Render FPS in the top right corner with ms accuracy.
+ * Render FPS in the top right corner. The actual FPS calculation is rather inaccurate.
  */
 void render_fps(SDL_Renderer *renderer) {
     static Uint32 ticks = 0, fps = 0;
@@ -1153,13 +1152,9 @@ void Game_new(Game *game, SDL_Renderer *renderer) {
     game->score = 0;
 }
 
-void Game_destroy(Game *game) {
-
-}
-
 /*** Main ***/
 
-int main(int argc, char *argv[]) {
+int main() {
     SDL_Window *window;
     SDL_Renderer *renderer;
     sdl_init(&window, &renderer);
@@ -1173,7 +1168,6 @@ int main(int argc, char *argv[]) {
     while(1) {
         if (Spaceship_is_dead(game.spaceships)) {
             SoundChunkCache_play(SOUND_CHUNK_LOST);
-            Game_destroy(&game);
             if (show_game_over_screen(renderer, game.score)) {
                 Game_new(&game, renderer);
             } else {
@@ -1189,10 +1183,10 @@ int main(int argc, char *argv[]) {
         SDL_RenderClear(renderer);
         render_stars(renderer);
 
-        move_spaceships(game.spaceships, &game.explosions, renderer);
+        move_spaceships(game.spaceships);
         BulletsManager_move_bullets(game.bullets_manager);
         Spaceship_fire(game.spaceships, game.bullets_manager, renderer, false);
-        apply_bullet_hits(renderer, game.spaceships, game.bullets_manager, &game.explosions);
+        apply_bullet_hits(game.spaceships, game.bullets_manager);
         game.score += Spaceship_clean_up(game.spaceships, &game.explosions, renderer);
         render_score(renderer, game.score);
         make_enemies_shoot(game.spaceships, game.bullets_manager, renderer);
