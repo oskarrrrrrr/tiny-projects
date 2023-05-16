@@ -5,8 +5,9 @@
 
 #define SCREEN_WIDTH 1280
 #define SCREEN_HEIGHT 720
-
-#define TILE_SIZE 50
+#define TILE_SIZE 40
+#define MIN_LEVEL_WIDTH 32 // 1280 / 40
+#define MIN_LEVEL_HEIGHT 18 // 720 / 40
 
 /*** SDL Utilities ***/
 
@@ -42,9 +43,16 @@ void _SDL_print_rect(SDL_Rect rect) {
 /*** Stage ***/
 
 typedef struct {
-    size_t width, height;
+    uint64_t width, height;
     bool *tiles;
 } Stage;
+
+void Stage_init(Stage* stage) {
+    stage->width = MIN_LEVEL_WIDTH;
+    stage->height = MIN_LEVEL_HEIGHT;
+    stage->tiles = malloc(sizeof(bool) * stage->width * stage->height);
+    memset(stage->tiles, 0, sizeof(bool) * stage->width * stage->height);
+}
 
 void Stage_marshal(const Stage* stage, uint8_t* buffer) {
     // version
@@ -143,14 +151,14 @@ void Stage_load(Stage* stage, const char* filename) {
 }
 
 void Stage_draw(Stage* stage, SDL_Renderer *renderer) {
-    for (int r = 0; r < stage->height; r++) {
-        for (int c = 0; c < stage->width; c++) {
+    for (size_t r = 0; r < stage->height; r++) {
+        for (size_t c = 0; c < stage->width; c++) {
             if (!stage->tiles[r * stage->width + c]) { continue; }
             SDL_Rect outer_rect = {
-                .x = c * TILE_SIZE - 1,
-                .y = SCREEN_HEIGHT - (10 * TILE_SIZE) + (r * TILE_SIZE) - 1,
-                .w = TILE_SIZE + 1,
-                .h = TILE_SIZE + 1
+                .x = c * TILE_SIZE,
+                .y = r * TILE_SIZE,
+                .w = TILE_SIZE,
+                .h = TILE_SIZE
             };
             SDL_SetRenderDrawColor(renderer, 0, 200, 0, 255);
             SDL_RenderFillRect(renderer, &outer_rect);
@@ -167,25 +175,23 @@ void Stage_draw(Stage* stage, SDL_Renderer *renderer) {
 }
 
 void Stage_toggle_tile(Stage* stage, int32_t x, int32_t y) {
-    size_t row = (float)(y - (SCREEN_HEIGHT - stage->height * TILE_SIZE)) / TILE_SIZE;
+    size_t row = (float)y / TILE_SIZE;
     size_t col = (float)x / TILE_SIZE;
-    if (row > stage->height || col > stage->width) {
-        return;
-    }
+    if (row > stage->height || col > stage->width) { return; }
     stage->tiles[row * stage->width + col] = !stage->tiles[row * stage->width + col];
 }
 
 void show_grid(SDL_Renderer *renderer) {
     SDL_SetRenderDrawColor(renderer, 210, 70, 148, 255);
-    for (int x = 0; x < SCREEN_WIDTH; x += TILE_SIZE) {
-        SDL_RenderDrawLine(renderer, x - 1, 0, x - 1, SCREEN_HEIGHT);
+    SDL_RenderDrawLine(renderer, 0, 0, 0, SCREEN_HEIGHT);
+    for (int x = TILE_SIZE; x <= SCREEN_WIDTH; x += TILE_SIZE) {
+        SDL_RenderDrawLine(renderer, x-1, 0, x-1, SCREEN_HEIGHT);
+        SDL_RenderDrawLine(renderer, x, 0, x, SCREEN_HEIGHT);
     }
-    for (int y = 0; y < SCREEN_HEIGHT; y += TILE_SIZE) {
-        SDL_RenderDrawLine(
-            renderer,
-            0, SCREEN_HEIGHT - (y + 1),
-            SCREEN_WIDTH, SCREEN_HEIGHT - (y + 1)
-        );
+    SDL_RenderDrawLine(renderer, 0, 0, SCREEN_WIDTH, 0);
+    for (int y = TILE_SIZE; y <= SCREEN_HEIGHT; y += TILE_SIZE) {
+        SDL_RenderDrawLine(renderer, 0, y-1, SCREEN_WIDTH, y-1);
+        SDL_RenderDrawLine(renderer, 0, y, SCREEN_WIDTH, y);
     }
 }
 
