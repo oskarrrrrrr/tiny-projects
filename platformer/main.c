@@ -174,11 +174,16 @@ void Stage_draw(Stage* stage, SDL_Renderer *renderer) {
     }
 }
 
-void Stage_toggle_tile(Stage* stage, int32_t x, int32_t y) {
+bool* Stage_tile_at(Stage* stage, int32_t x, int32_t y) {
+    if (x > SCREEN_WIDTH || y > SCREEN_HEIGHT) {
+        return NULL;
+    }
     size_t row = (float)y / TILE_SIZE;
     size_t col = (float)x / TILE_SIZE;
-    if (row > stage->height || col > stage->width) { return; }
-    stage->tiles[row * stage->width + col] = !stage->tiles[row * stage->width + col];
+    if (row > stage->height || col > stage->width) {
+        return NULL;
+    }
+    return stage->tiles + (row * stage->width + col);
 }
 
 void show_grid(SDL_Renderer *renderer) {
@@ -207,6 +212,10 @@ int main() {
 
     bool continue_ = true;
     bool show_grid_ = false;
+
+    bool mouse_down = false;
+    bool brush_mode = false;
+
     while(continue_) {
         SDL_Event event;
         while(SDL_PollEvent(&event)) {
@@ -214,7 +223,23 @@ int main() {
                 case SDL_QUIT:
                     continue_ = false;
                 case SDL_MOUSEBUTTONDOWN:
-                    Stage_toggle_tile(&stage, event.motion.x, event.motion.y);
+                    mouse_down = true;
+                    bool* tile = Stage_tile_at(&stage, event.motion.x, event.motion.y);
+                    if (tile != NULL)  {
+                        *tile = !(*tile);
+                        brush_mode = *tile;
+                    }
+                    break;
+                case SDL_MOUSEBUTTONUP:
+                    mouse_down = false;
+                    break;
+                case SDL_MOUSEMOTION:
+                    if (mouse_down) {
+                        bool* tile = Stage_tile_at(&stage, event.motion.x, event.motion.y);
+                        if (tile != NULL) {
+                            *tile = brush_mode;
+                        }
+                    }
                     break;
                 case SDL_KEYDOWN:
                     if (event.key.repeat != 0) { break; }
