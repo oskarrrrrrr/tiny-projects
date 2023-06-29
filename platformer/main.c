@@ -1,4 +1,6 @@
 #include "SDL_events.h"
+#include "SDL_video.h"
+#include "SDL_ttf.h"
 #include <SDL.h>
 #include <stdio.h>
 #include <stdbool.h>
@@ -22,11 +24,13 @@ void _SDL_init(SDL_Window **window, SDL_Renderer **renderer) {
         "Platformer",
         SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED,
         SCREEN_WIDTH, SCREEN_HEIGHT,
-        0 // TODO: do we need SDL_WINDOW_ALLOW_HIGHDPI?
+        SDL_WINDOW_ALLOW_HIGHDPI
     );
     if (!*window) { _SDL_fail(); }
     *renderer = SDL_CreateRenderer(*window, -1, SDL_RENDERER_ACCELERATED);
     if (!*renderer) { _SDL_fail(); }
+
+    TTF_Init();
 }
 
 void _SDL_destroy(SDL_Window **window, SDL_Renderer **renderer) {
@@ -34,10 +38,52 @@ void _SDL_destroy(SDL_Window **window, SDL_Renderer **renderer) {
     *renderer = NULL;
     SDL_DestroyWindow(*window);
     *window = NULL;
+    TTF_Quit();
 }
 
 void _SDL_print_rect(SDL_Rect rect) {
     printf("Rect{x: %d, y: %d, w: %d, h: %d}\n", rect.x, rect.y, rect.w, rect.h);
+}
+
+
+void _SDL_get_window_scale(SDL_Window *window, SDL_Renderer *renderer, float *xs, float *ys) {
+    int windowWidth, windowHeight;
+    SDL_GetWindowSize(window, &windowWidth, &windowHeight);
+    int rendererWidth, rendererHeight;
+    SDL_GetRendererOutputSize(renderer, &rendererWidth, &rendererHeight);
+	if (rendererWidth != windowWidth) {
+		*xs = ((float) rendererWidth) / windowWidth;
+		*ys = ((float) rendererHeight) / windowHeight;
+	} else {
+        *xs = 1;
+        *ys = 1;
+    }
+}
+
+SDL_Rect Rect_scale(SDL_Window *window, SDL_Renderer *renderer, SDL_Rect *rect) {
+    float xs, ys;
+    _SDL_get_window_scale(window, renderer, &xs, &ys);
+    SDL_Rect res = {
+        (float) rect->x * xs,
+        (float) rect->y * ys,
+        (float) rect->w * xs,
+        (float) rect->h * ys
+    };
+    return res;
+}
+
+/* func TtfOpenFont(window *sdl.Window, renderer *sdl.Renderer, fontFileName string, size uint32) (*ttf.Font, error) { */
+/* 	xs, _ := GetWindowScale(window, renderer) */
+/* 	return ttf.OpenFont(fontFileName, int(float32(size)*xs)) */
+/* } */
+
+TTF_Font *_TTF_open_font(
+    SDL_Window *window, SDL_Renderer *renderer, char *font_file_name, int font_size
+) {
+    float xs, ys;
+    _SDL_get_window_scale(window, renderer, &xs, &ys);
+    int size = (int)(font_size * xs);
+    return TTF_OpenFont(font_file_name, size);
 }
 
 /*** Stage ***/
@@ -150,7 +196,7 @@ void Stage_load(Stage* stage, const char* filename) {
     }
 }
 
-void Stage_draw(Stage* stage, SDL_Renderer *renderer) {
+void Stage_draw(Stage* stage, SDL_Window *window, SDL_Renderer *renderer) {
     for (size_t r = 0; r < stage->height; r++) {
         for (size_t c = 0; c < stage->width; c++) {
             if (!stage->tiles[r * stage->width + c]) { continue; }
@@ -160,16 +206,18 @@ void Stage_draw(Stage* stage, SDL_Renderer *renderer) {
                 .w = TILE_SIZE,
                 .h = TILE_SIZE
             };
+            SDL_Rect scaled_outer_rect = Rect_scale(window, renderer, &outer_rect);
             SDL_SetRenderDrawColor(renderer, 0, 200, 0, 255);
-            SDL_RenderFillRect(renderer, &outer_rect);
+            SDL_RenderFillRect(renderer, &scaled_outer_rect);
             SDL_Rect inner_rect = {
                 .x =  outer_rect.x+1,
                 .y =  outer_rect.y+1,
                 .w =  outer_rect.w-2,
                 .h =  outer_rect.h-2
             };
+            SDL_Rect scaled_inner_rect = Rect_scale(window, renderer, &inner_rect);
             SDL_SetRenderDrawColor(renderer, 0, 128, 0, 255);
-            SDL_RenderFillRect(renderer, &inner_rect);
+            SDL_RenderFillRect(renderer, &scaled_inner_rect);
         }
     }
 }
@@ -198,6 +246,30 @@ void show_grid(SDL_Renderer *renderer) {
         SDL_RenderDrawLine(renderer, 0, y-1, SCREEN_WIDTH, y-1);
         SDL_RenderDrawLine(renderer, 0, y, SCREEN_WIDTH, y);
     }
+}
+
+void show_file_name(SDL_Renderer *renderer, SDL_Window *window) {
+    float xs, ys;
+    _SDL_get_window_scale(window, renderer, &xs, &ys);
+    TTF_Font *font = _TTF_open_font(window, renderer, "assets/Lato/Lato-Regular.ttf", 10 * xs);
+    if (font == NULL) { _SDL_fail(); }
+    SDL_Color gray = { 64, 64, 64, 255 };
+    // TODO: actually show the file name
+    SDL_Surface *font_surface = TTF_RenderUTF8_Blended(font, "stages/test_stage.bin", gray);
+    if (font_surface == NULL) { _SDL_fail(); }
+    SDL_Texture *font_texture = SDL_CreateTextureFromSurface(renderer, font_surface);
+    int w, h;
+    SDL_QueryTexture(font_texture, NULL, NULL, &w, &h);
+    int x_margin = 5, y_margin = 2;
+    SDL_Rect dst = {
+        (xs * SCREEN_WIDTH) - w - (xs * x_margin),
+        (ys * SCREEN_HEIGHT) - h - (ys * y_margin),
+        w,
+        h
+    };
+    SDL_RenderCopy(renderer, font_texture, NULL, &dst);
+    SDL_DestroyTexture(font_texture);
+    TTF_CloseFont(font);
 }
 
 int main() {
@@ -262,8 +334,9 @@ int main() {
 
         SDL_SetRenderDrawColor(renderer, 128, 128, 128, 255);
         SDL_RenderClear(renderer);
-        Stage_draw(&stage, renderer);
+        Stage_draw(&stage, window, renderer);
         if (show_grid_) { show_grid(renderer); }
+        show_file_name(renderer, window);
         SDL_RenderPresent(renderer);
     }
     free(stage.tiles);
