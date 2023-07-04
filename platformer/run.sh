@@ -1,4 +1,4 @@
-gcc main.c \
+gcc main.c SDL_utils.c stage.c \
     -o platformer \
     -g \
     -Wall -Wextra -Wunreachable-code \
