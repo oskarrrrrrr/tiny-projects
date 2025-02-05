@@ -1,6 +1,7 @@
 spaceships/spaceships
 butter/butter
 platformer/platformer
+lines/lines
 .DS_Store
 *.dSym
 .clangd
